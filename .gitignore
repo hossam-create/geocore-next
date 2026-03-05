@@ -1,0 +1,22 @@
+# Binaries
+backend/bin/
+*.exe
+
+# Environment
+.env
+backend/.env
+
+# Go
+vendor/
+*.test
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Temp / build files
+*.zip
+*.ps1
+*.sh
+tmp/
