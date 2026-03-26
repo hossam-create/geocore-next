@@ -3,6 +3,7 @@ node_modules/
 dist/
 build/
 out/
+tmp/
 
 .env
 .env.local
@@ -25,13 +26,20 @@ coverage/
 
 vendor/
 
+*.tsbuildinfo
 *.test.out
 __pycache__/
 *.pyc
 
+.expo/
+.expo-shared/
+
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+*.exe
+*.out
 
 .replit.cache/
 .local/
