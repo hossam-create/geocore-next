@@ -1,0 +1,8 @@
+apiVersion: v1
+  kind: Namespace
+  metadata:
+    name: geocore-prod
+    labels:
+      app.kubernetes.io/name: geocore
+      env: production
+  

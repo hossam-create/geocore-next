@@ -1,0 +1,1912 @@
+Task 1.3: Social Login (Google OAuth)
+📝 Prompt جاهز:
+أنت مطور Go expert في OAuth 2.0 وتعمل على GeoCore Next.
+
+السياق:
+- Go + Gin + GORM + PostgreSQL
+- موجود: JWT auth system
+- المطلوب: Google OAuth Login كامل
+
+المطلوب:
+
+1. Dependencies:
+   - استخدم golang.org/x/oauth2
+   - استخدم golang.org/x/oauth2/google
+
+2. Environment Variables:
+   - GOOGLE_CLIENT_ID
+   - GOOGLE_CLIENT_SECRET
+   - GOOGLE_REDIRECT_URL
+
+3. Database:
+   - أضف جدول `oauth_providers`:
+     * id, user_id, provider (google/facebook), provider_user_id, access_token, refresh_token, created_at
+   - أضف `oauth_id` في users table (nullable)
+
+4. OAuth Flow:
+   - GET /api/v1/auth/google/login
+     * يولد authorization URL
+     * يرجع URL للـ frontend
+   
+   - GET /api/v1/auth/google/callback
+     * يستقبل code من Google
+     * يبادل code بـ access token
+     * يجيب user info من Google
+     * يبحث عن user بـ email أو ينشئ جديد
+     * يولد JWT token
+     * يحفظ OAuth info في oauth_providers table
+     * يرجع JWT للـ frontend
+
+5. User Linking:
+   - إذا user موجود بنفس الإيميل: link OAuth account
+   - إذا جديد: أنشئ user جديد (email_verified = true)
+   - handle: email من Google قد لا يكون verified
+
+6. Security:
+   - استخدم state parameter ل CSRF protection
+   - احفظ state في Redis لمدة 10 دقائق
+   - تحقق من state في callback
+
+7. Error Handling:
+   - Invalid state
+   - Authorization denied
+   - Google API errors
+   - Duplicate email conflicts
+
+الكود يكون:
+- Secure و production-ready
+- مع proper error handling
+- مع rate limiting
+- مع comprehensive logging
+
+ابدأ التنفيذ.
+
+Task 1.4: Rate Limiting Middleware
+📝 Prompt جاهز:
+أنت Go security expert تعمل على GeoCore Next.
+
+السياق:
+- Go + Gin + Redis
+- المطلوب: نظام Rate Limiting شامل
+
+المطلوب:
+
+1. Redis-based Rate Limiter:
+   - استخدم Redis للـ distributed rate limiting
+   - استخدم sliding window algorithm
+   - Package: pkg/middleware/ratelimit.go
+
+2. Rate Limit Strategies:
+   
+   A. Per IP:
+   - 100 requests / 15 minutes (عام)
+   - key: "ratelimit:ip:{ip}:{endpoint}"
+   
+   B. Per User (authenticated):
+   - 200 requests / 15 minutes
+   - key: "ratelimit:user:{user_id}:{endpoint}"
+   
+   C. Sensitive Endpoints (custom limits):
+   - Register: 5 / hour per IP
+   - Login: 10 / 15 min per IP
+   - Password reset: 3 / hour per IP
+   - Email verification resend: 5 / hour per user
+   - Create listing: 20 / day per user
+   - Place bid: 50 / hour per user
+
+3. Implementation:
+```go
+   func RateLimitMiddleware(
+       limit int, 
+       window time.Duration, 
+       keyPrefix string,
+   ) gin.HandlerFunc {
+       // Implementation
+   }
+```
+
+4. Response Headers:
+   - X-RateLimit-Limit
+   - X-RateLimit-Remaining
+   - X-RateLimit-Reset
+
+5. Error Response:
+   - Status: 429 Too Many Requests
+   - Body: {
+       "error": "rate_limit_exceeded",
+       "message": "Too many requests. Please try again in X minutes.",
+       "retry_after": 300
+     }
+
+6. Features:
+   - Whitelist IPs (admin IPs)
+   - Bypass for health check endpoints
+   - Logging rate limit violations
+   - Alert عند abuse patterns
+
+7. Configuration:
+   - يكون configurable via environment vars
+   - default values معقولة
+
+اكتب الكود production-ready مع:
+- Error handling
+- Logging
+- Testing examples
+- Documentation
+
+ابدأ التنفيذ.
+
+Task 1.5: Input Validation & Sanitization
+📝 Prompt جاهز:
+أنت Go security expert متخصص في Input Validation.
+
+السياق:
+- GeoCore Next: Go + Gin + GORM
+- المطلوب: نظام شامل للـ Input Validation & Sanitization
+
+المطلوب:
+
+1. Validation Package:
+   - pkg/validator/validator.go
+   - استخدم github.com/go-playground/validator/v10
+   - Custom validators
+
+2. Validation Rules:
+
+   A. User Registration:
+```go
+   type RegisterRequest struct {
+       Email    string `json:"email" validate:"required,email,max=255"`
+       Password string `json:"password" validate:"required,min=8,max=128,password"`
+       Name     string `json:"name" validate:"required,min=2,max=100,alphanumunicode"`
+       Phone    string `json:"phone" validate:"omitempty,e164"` // E.164 format
+   }
+```
+
+   B. Create Listing:
+```go
+   type CreateListingRequest struct {
+       Title       string   `json:"title" validate:"required,min=5,max=200"`
+       Description string   `json:"description" validate:"required,min=20,max=5000"`
+       Price       float64  `json:"price" validate:"required,min=0,max=999999999"`
+       CategoryID  int64    `json:"category_id" validate:"required,gt=0"`
+       Location    Location `json:"location" validate:"required"`
+       Images      []string `json:"images" validate:"omitempty,max=10,dive,url"`
+   }
+
+   type Location struct {
+       Latitude  float64 `json:"latitude" validate:"required,latitude"`
+       Longitude float64 `json:"longitude" validate:"required,longitude"`
+       Address   string  `json:"address" validate:"required,max=500"`
+   }
+```
+
+   C. Place Bid:
+```go
+   type PlaceBidRequest struct {
+       AuctionID int64   `json:"auction_id" validate:"required,gt=0"`
+       Amount    float64 `json:"amount" validate:"required,gt=0"`
+   }
+```
+
+3. Custom Validators:
+   - Password validator: min 8 chars, uppercase, lowercase, number
+   - Phone validator: E.164 international format
+   - URL validator: للصور
+   - Latitude/Longitude validator
+
+4. Sanitization:
+   - HTML sanitization (bluemonday package)
+   - SQL injection prevention (GORM يحمي لكن double check)
+   - XSS prevention في text fields
+   - Trim whitespace
+   - Remove control characters
+
+5. Error Responses:
+```json
+   {
+     "error": "validation_failed",
+     "message": "Validation errors occurred",
+     "details": [
+       {
+         "field": "email",
+         "message": "must be a valid email address"
+       },
+       {
+         "field": "password",
+         "message": "must be at least 8 characters with uppercase, lowercase, and number"
+       }
+     ]
+   }
+```
+
+6. Middleware:
+```go
+   func ValidateRequest(v interface{}) gin.HandlerFunc {
+       // Binds JSON and validates
+   }
+```
+
+7. Features:
+   - Localized error messages (EN/AR)
+   - Field-level errors
+   - Custom error messages
+   - Comprehensive logging
+
+اكتب الكود مع:
+- All validation rules
+- Custom validators
+- Sanitization functions
+- Middleware
+- Error handling
+- Tests examples
+
+ابدأ التنفيذ.
+
+💳 المرحلة 2: نظام الدفع (Week 3-4)
+Task 2.1: Stripe Integration - Complete Setup
+📝 Prompt جاهز:
+أنت Stripe integration expert تعمل على GeoCore Next.
+
+السياق:
+- Go + Gin + GORM + PostgreSQL
+- المطلوب: Stripe payment system كامل للـ classifieds & auctions
+
+المطلوب:
+
+1. Dependencies:
+   - github.com/stripe/stripe-go/v76
+
+2. Database Schema:
+```sql
+   -- payments table
+   CREATE TABLE payments (
+       id BIGSERIAL PRIMARY KEY,
+       user_id BIGINT NOT NULL REFERENCES users(id),
+       listing_id BIGINT REFERENCES listings(id),
+       auction_id BIGINT REFERENCES auctions(id),
+       stripe_payment_intent_id VARCHAR(255) UNIQUE,
+       amount DECIMAL(10,2) NOT NULL,
+       currency VARCHAR(3) DEFAULT 'USD',
+       status VARCHAR(50), -- pending, succeeded, failed, refunded
+       payment_method VARCHAR(50), -- card, wallet
+       description TEXT,
+       metadata JSONB,
+       created_at TIMESTAMP DEFAULT NOW(),
+       updated_at TIMESTAMP DEFAULT NOW()
+   );
+
+   -- escrow_accounts table
+   CREATE TABLE escrow_accounts (
+       id BIGSERIAL PRIMARY KEY,
+       payment_id BIGINT REFERENCES payments(id),
+       seller_id BIGINT REFERENCES users(id),
+       buyer_id BIGINT REFERENCES users(id),
+       amount DECIMAL(10,2),
+       status VARCHAR(50), -- held, released, refunded
+       released_at TIMESTAMP,
+       created_at TIMESTAMP DEFAULT NOW()
+   );
+
+   -- Add stripe_customer_id to users
+   ALTER TABLE users ADD COLUMN stripe_customer_id VARCHAR(255) UNIQUE;
+```
+
+3. Stripe Customer Management:
+   - عند register: أنشئ Stripe customer
+   - احفظ stripe_customer_id في users table
+   - Sync user data مع Stripe
+
+4. Payment Intent Flow:
+   
+   POST /api/v1/payments/create-payment-intent
+```go
+   type CreatePaymentIntentRequest struct {
+       ListingID *int64  `json:"listing_id"`
+       AuctionID *int64  `json:"auction_id"`
+       Amount    float64 `json:"amount" validate:"required,gt=0"`
+       Currency  string  `json:"currency" validate:"required,iso4217"`
+   }
+
+   Response:
+   {
+       "payment_intent_id": "pi_xxx",
+       "client_secret": "pi_xxx_secret_xxx",
+       "amount": 5000,
+       "currency": "usd"
+   }
+```
+
+5. Payment Confirmation:
+   
+   POST /api/v1/payments/confirm
+```go
+   type ConfirmPaymentRequest struct {
+       PaymentIntentID string `json:"payment_intent_id" validate:"required"`
+   }
+```
+   - تحقق من payment status من Stripe
+   - إذا succeeded: move money to escrow
+   - أرسل إيميل confirmation للـ buyer & seller
+
+6. Escrow System:
+   - Payment يروح لـ escrow أول ما ينجح
+   - يتحرر بعد buyer confirmation أو 7 أيام
+   - POST /api/v1/payments/release-escrow
+   - POST /api/v1/payments/request-refund
+
+7. Payment Methods:
+   - Save payment methods للـ customers
+   - GET /api/v1/payments/payment-methods
+   - POST /api/v1/payments/add-payment-method
+   - DELETE /api/v1/payments/payment-methods/:id
+
+8. Error Handling:
+   - Card declined
+   - Insufficient funds
+   - Authentication required (3D Secure)
+   - Network errors
+   - All Stripe error types
+
+الكود يكون:
+- Secure و PCI compliant
+- مع proper error handling
+- مع comprehensive logging
+- Production-ready
+
+ابدأ التنفيذ خطوة بخطوة.
+
+Task 2.2: Stripe Webhooks
+📝 Prompt جاهز:
+أنت Stripe webhooks expert تعمل على GeoCore Next.
+
+السياق:
+- Go + Gin + Stripe integration موجود
+- المطلوب: Webhook handling شامل
+
+المطلوب:
+
+1. Webhook Endpoint:
+   POST /api/v1/webhooks/stripe
+   - يستقبل events من Stripe
+   - يتحقق من signature
+   - يعالج events asynchronously
+
+2. Signature Verification:
+```go
+   func VerifyStripeSignature(
+       payload []byte,
+       signature string,
+       secret string,
+   ) (*stripe.Event, error) {
+       // Implementation using stripe.ConstructEvent
+   }
+```
+
+3. Events المطلوب معالجتها:
+   
+   A. payment_intent.succeeded:
+   - حدّث payment status في DB
+   - أنشئ escrow record
+   - أرسل notification للـ buyer & seller
+   - أرسل receipt email
+   
+   B. payment_intent.payment_failed:
+   - حدّث payment status
+   - notify user
+   - log failure reason
+   
+   C. charge.refunded:
+   - حدّث payment & escrow status
+   - notify buyer & seller
+   - أرسل refund confirmation email
+   
+   D. customer.subscription.created (للخطط المدفوعة):
+   - حدّث user subscription status
+   - unlock premium features
+   
+   E. customer.subscription.deleted:
+   - downgrade user
+   - notify user
+
+4. Event Processing:
+   - استخدم queue (Redis + worker) للـ async processing
+   - Idempotency: تأكد أن Event يتعالج مرة واحدة فقط
+   - Retry logic للـ failed events
+   - Dead letter queue للـ events اللي فشلت بعد retries
+
+5. Database:
+```sql
+   CREATE TABLE webhook_events (
+       id BIGSERIAL PRIMARY KEY,
+       stripe_event_id VARCHAR(255) UNIQUE,
+       event_type VARCHAR(100),
+       payload JSONB,
+       processed BOOLEAN DEFAULT FALSE,
+       processed_at TIMESTAMP,
+       retry_count INT DEFAULT 0,
+       error TEXT,
+       created_at TIMESTAMP DEFAULT NOW()
+   );
+```
+
+6. Logging & Monitoring:
+   - Log كل webhook received
+   - Alert عند failures
+   - Metrics: success rate, processing time
+
+7. Security:
+   - Verify signature لكل request
+   - Return 200 immediately
+   - Process asynchronously
+   - Rate limiting
+
+8. Testing:
+   - استخدم Stripe CLI للـ testing
+   - Mock webhook events
+   - Test all event types
+
+الكود يكون production-ready مع best practices.
+
+ابدأ التنفيذ.
+
+🖼️ المرحلة 3: إدارة الصور (Week 5)
+Task 3.1: Image Upload System (Cloudflare R2)
+📝 Prompt جاهز:
+أنت cloud storage expert تعمل على GeoCore Next.
+
+السياق:
+- Go + Gin
+- المطلوب: نظام رفع صور كامل باستخدام Cloudflare R2 (S3-compatible)
+
+المطلوب:
+
+1. Dependencies:
+   - github.com/aws/aws-sdk-go-v2/service/s3
+   - github.com/disintegration/imaging (image processing)
+
+2. Environment Variables:
+R2_ACCOUNT_ID=xxx
+R2_ACCESS_KEY_ID=xxx
+R2_SECRET_ACCESS_KEY=xxx
+R2_BUCKET_NAME=geocore-images
+R2_PUBLIC_URL=https://images.geocore.com
+
+3. Database Schema:
+```sql
+   CREATE TABLE images (
+       id BIGSERIAL PRIMARY KEY,
+       user_id BIGINT REFERENCES users(id),
+       listing_id BIGINT REFERENCES listings(id),
+       filename VARCHAR(255),
+       original_filename VARCHAR(255),
+       url TEXT,
+       thumbnail_url TEXT,
+       size_bytes BIGINT,
+       width INT,
+       height INT,
+       format VARCHAR(10), -- jpg, png, webp
+       is_primary BOOLEAN DEFAULT FALSE,
+       created_at TIMESTAMP DEFAULT NOW()
+   );
+
+   CREATE INDEX idx_images_listing ON images(listing_id);
+```
+
+4. Upload Endpoint:
+   POST /api/v1/images/upload
+   - accepts multipart/form-data
+   - max 10 images per request
+   - max 5MB per image
+```go
+   type UploadResponse struct {
+       Images []ImageInfo `json:"images"`
+   }
+
+   type ImageInfo struct {
+       ID           int64  `json:"id"`
+       URL          string `json:"url"`
+       ThumbnailURL string `json:"thumbnail_url"`
+       Width        int    `json:"width"`
+       Height       int    `json:"height"`
+   }
+```
+
+5. Image Processing Pipeline:
+   A. Validation:
+   - Allowed formats: JPEG, PNG, WebP
+   - Max size: 5MB
+   - Max dimensions: 4000x4000
+   - Check mime type (not just extension)
+   
+   B. Processing:
+   - Generate unique filename: {uuid}.{ext}
+   - Convert to WebP (better compression)
+   - Generate multiple sizes:
+     * Original (max 1920x1920)
+     * Thumbnail (400x400, crop center)
+     * Medium (800x800)
+   
+   C. Upload to R2:
+   - Upload original
+   - Upload thumbnail
+   - Upload medium
+   - Folder structure: {year}/{month}/{filename}
+   
+   D. Save to DB:
+   - Save image metadata
+   - Return URLs
+
+6. Delete Endpoint:
+   DELETE /api/v1/images/:id
+   - Verify ownership
+   - Delete من R2
+   - Delete من DB
+
+7. Security:
+   - Verify file type (check magic bytes)
+   - Scan for malware (optional: ClamAV)
+   - Rate limit uploads
+   - Authenticated users only
+   - Watermark (optional)
+
+8. Helper Functions:
+```go
+   func ValidateImage(file multipart.File) error
+   func ProcessImage(file multipart.File) ([]ProcessedImage, error)
+   func UploadToR2(filename string, data []byte) (string, error)
+   func DeleteFromR2(filename string) error
+   func GenerateThumbnail(img image.Image) image.Image
+```
+
+9. Error Handling:
+   - Invalid file type
+   - File too large
+   - Upload failed
+   - Processing failed
+   - R2 connection errors
+
+الكود يكون:
+- Optimized for performance
+- With proper error handling
+- Production-ready
+- With logging
+
+ابدأ التنفيذ.
+
+🔍 المرحلة 4: البحث المتقدم (Week 6)
+Task 4.1: Advanced Search & Filters
+📝 Prompt جاهز:
+أنت PostgreSQL و search optimization expert تعمل على GeoCore Next.
+
+السياق:
+- Go + GORM + PostgreSQL 16 + PostGIS
+- المطلوب: نظام بحث متقدم مع filters
+
+المطلوب:
+
+1. Database Optimization:
+```sql
+   -- Full-text search indexes
+   ALTER TABLE listings ADD COLUMN search_vector tsvector;
+
+   CREATE INDEX idx_listings_search ON listings 
+   USING GIN(search_vector);
+
+   -- Update trigger
+   CREATE TRIGGER tsvector_update BEFORE INSERT OR UPDATE ON listings
+   FOR EACH ROW EXECUTE FUNCTION
+   tsvector_update_trigger(search_vector, 'pg_catalog.english', title, description);
+
+   -- Location index (PostGIS)
+   CREATE INDEX idx_listings_location ON listings 
+   USING GIST(ST_MakePoint(longitude, latitude));
+
+   -- Other indexes
+   CREATE INDEX idx_listings_category ON listings(category_id);
+   CREATE INDEX idx_listings_price ON listings(price);
+   CREATE INDEX idx_listings_created ON listings(created_at DESC);
+   CREATE INDEX idx_listings_status ON listings(status);
+```
+
+2. Search Endpoint:
+   GET /api/v1/listings/search
+   
+   Query Parameters:
+```go
+   type SearchRequest struct {
+       // Text search
+       Query string `form:"q"`
+       
+       // Filters
+       CategoryID   *int64   `form:"category_id"`
+       MinPrice     *float64 `form:"min_price"`
+       MaxPrice     *float64 `form:"max_price"`
+       Condition    string   `form:"condition"` // new, used, refurbished
+       
+       // Location
+       Latitude     *float64 `form:"lat"`
+       Longitude    *float64 `form:"lng"`
+       Radius       *int     `form:"radius"` // in km, default 10
+       City         string   `form:"city"`
+       Country      string   `form:"country"`
+       
+       // Sorting
+       SortBy       string   `form:"sort_by"` // relevance, price_asc, price_desc, date, distance
+       
+       // Pagination
+       Page         int      `form:"page" validate:"min=1"`
+       PerPage      int      `form:"per_page" validate:"min=1,max=100"`
+   }
+```
+
+3. Search Implementation:
+```go
+   func SearchListings(ctx context.Context, req SearchRequest) ([]Listing, int64, error) {
+       query := db.Model(&Listing{}).
+           Where("status = ?", "active")
+
+       // Full-text search
+       if req.Query != "" {
+           query = query.Where(
+               "search_vector @@ plainto_tsquery('english', ?)", 
+               req.Query,
+           ).Order(gorm.Expr(
+               "ts_rank(search_vector, plainto_tsquery('english', ?)) DESC", 
+               req.Query,
+           ))
+       }
+
+       // Price range
+       if req.MinPrice != nil {
+           query = query.Where("price >= ?", *req.MinPrice)
+       }
+       if req.MaxPrice != nil {
+           query = query.Where("price <= ?", *req.MaxPrice)
+       }
+
+       // Category
+       if req.CategoryID != nil {
+           query = query.Where("category_id = ?", *req.CategoryID)
+       }
+
+       // Location (radius search using PostGIS)
+       if req.Latitude != nil && req.Longitude != nil {
+           radius := 10 // default 10km
+           if req.Radius != nil {
+               radius = *req.Radius
+           }
+           query = query.Where(
+               "ST_DWithin(ST_MakePoint(longitude, latitude)::geography, ST_MakePoint(?, ?)::geography, ?)",
+               *req.Longitude, *req.Latitude, radius*1000, // convert km to meters
+           )
+       }
+
+       // Sorting
+       switch req.SortBy {
+       case "price_asc":
+           query = query.Order("price ASC")
+       case "price_desc":
+           query = query.Order("price DESC")
+       case "date":
+           query = query.Order("created_at DESC")
+       case "distance":
+           if req.Latitude != nil && req.Longitude != nil {
+               query = query.Order(gorm.Expr(
+                   "ST_Distance(ST_MakePoint(longitude, latitude)::geography, ST_MakePoint(?, ?)::geography)",
+                   *req.Longitude, *req.Latitude,
+               ))
+           }
+       default: // relevance
+           if req.Query == "" {
+               query = query.Order("created_at DESC")
+           }
+       }
+
+       // Count total
+       var total int64
+       query.Count(&total)
+
+       // Pagination
+       offset := (req.Page - 1) * req.PerPage
+       query = query.Offset(offset).Limit(req.PerPage)
+
+       // Preload associations
+       query = query.Preload("Images").Preload("Category")
+
+       var listings []Listing
+       err := query.Find(&listings).Error
+
+       return listings, total, err
+   }
+```
+
+4. Search Suggestions (Autocomplete):
+   GET /api/v1/listings/suggestions?q=iphone
+```go
+   func GetSearchSuggestions(query string, limit int) ([]string, error) {
+       var suggestions []string
+       
+       err := db.Model(&Listing{}).
+           Select("DISTINCT title").
+           Where("title ILIKE ?", query+"%").
+           Limit(limit).
+           Pluck("title", &suggestions).Error
+       
+       return suggestions, err
+   }
+```
+
+5. Faceted Search (Counts):
+   - أرجع counts لكل filter option
+```json
+   {
+       "results": [...],
+       "total": 1234,
+       "facets": {
+           "categories": [
+               {"id": 1, "name": "Electronics", "count": 450},
+               {"id": 2, "name": "Cars", "count": 280}
+           ],
+           "price_ranges": [
+               {"min": 0, "max": 100, "count": 320},
+               {"min": 100, "max": 500, "count": 580}
+           ],
+           "conditions": [
+               {"value": "new", "count": 670},
+               {"value": "used", "count": 564}
+           ]
+       }
+   }
+```
+
+6. Recently Searched:
+   - احفظ في Redis: user:{user_id}:recent_searches
+   - TTL: 30 days
+   - Max 20 searches
+
+7. Performance:
+   - استخدم Redis للـ caching
+   - Cache popular searches
+   - Cache facet counts
+   - TTL: 5 minutes
+
+الكود يكون optimized و production-ready.
+
+ابدأ التنفيذ.
+
+📱 المرحلة 5: نظام الإشعارات (Week 7)
+Task 5.1: Complete Notification System
+📝 Prompt جاهز:
+أنت notification systems expert تعمل على GeoCore Next.
+
+السياق:
+- Go + Gin + PostgreSQL + Redis
+- المطلوب: نظام إشعارات شامل (In-app, Email, Push)
+
+المطلوب:
+
+1. Database Schema:
+```sql
+   CREATE TABLE notifications (
+       id BIGSERIAL PRIMARY KEY,
+       user_id BIGINT NOT NULL REFERENCES users(id),
+       type VARCHAR(50) NOT NULL, -- new_bid, outbid, message, listing_approved, etc.
+       title VARCHAR(255),
+       body TEXT,
+       data JSONB, -- extra data
+       read BOOLEAN DEFAULT FALSE,
+       read_at TIMESTAMP,
+       created_at TIMESTAMP DEFAULT NOW()
+   );
+
+   CREATE INDEX idx_notifications_user ON notifications(user_id, created_at DESC);
+   CREATE INDEX idx_notifications_unread ON notifications(user_id, read) WHERE read = FALSE;
+
+   -- Notification preferences
+   CREATE TABLE notification_preferences (
+       user_id BIGINT PRIMARY KEY REFERENCES users(id),
+       email_new_bid BOOLEAN DEFAULT TRUE,
+       email_outbid BOOLEAN DEFAULT TRUE,
+       email_message BOOLEAN DEFAULT TRUE,
+       email_listing_approved BOOLEAN DEFAULT TRUE,
+       push_new_bid BOOLEAN DEFAULT TRUE,
+       push_outbid BOOLEAN DEFAULT TRUE,
+       push_message BOOLEAN DEFAULT TRUE,
+       in_app_enabled BOOLEAN DEFAULT TRUE,
+       created_at TIMESTAMP DEFAULT NOW(),
+       updated_at TIMESTAMP DEFAULT NOW()
+   );
+
+   -- Push tokens
+   CREATE TABLE push_tokens (
+       id BIGSERIAL PRIMARY KEY,
+       user_id BIGINT REFERENCES users(id),
+       token TEXT NOT NULL,
+       platform VARCHAR(20), -- web, ios, android
+       created_at TIMESTAMP DEFAULT NOW()
+   );
+```
+
+2. Notification Types:
+```go
+   const (
+       NotifNewBid             = "new_bid"              // someone bid on your auction
+       NotifOutbid             = "outbid"               // you've been outbid
+       NotifAuctionWon         = "auction_won"          // you won an auction
+       NotifAuctionEnded       = "auction_ended"        // auction you bid on ended
+       NotifNewMessage         = "new_message"          // new chat message
+       NotifListingApproved    = "listing_approved"     // your listing approved
+       NotifListingRejected    = "listing_rejected"     // your listing rejected
+       NotifPaymentSuccess     = "payment_success"      // payment successful
+       NotifPaymentFailed      = "payment_failed"       // payment failed
+       NotifEscrowReleased     = "escrow_released"      // money released from escrow
+       NotifNewReview          = "new_review"           // someone reviewed you
+   )
+```
+
+3. Notification Service:
+```go
+   package notification
+
+   type Service interface {
+       Send(userID int64, notif Notification) error
+       SendBulk(userIDs []int64, notif Notification) error
+       MarkAsRead(userID int64, notifID int64) error
+       MarkAllAsRead(userID int64) error
+       GetUnreadCount(userID int64) (int, error)
+   }
+
+   type Notification struct {
+       Type  string
+       Title string
+       Body  string
+       Data  map[string]interface{}
+   }
+```
+
+4. In-App Notifications:
+   
+   A. API Endpoints:
+   - GET /api/v1/notifications
+     * Pagination
+     * Filter by read/unread
+     * Real-time via WebSocket
+   
+   - GET /api/v1/notifications/unread-count
+   
+   - PUT /api/v1/notifications/:id/read
+   
+   - PUT /api/v1/notifications/mark-all-read
+   
+   - DELETE /api/v1/notifications/:id
+
+   B. WebSocket:
+   - WS /ws/notifications
+   - يرسل notifications في real-time
+   - يبقى متصل و يستقبل updates
+
+5. Email Notifications:
+   - استخدم email templates (HTML)
+   - Transactional emails via SendGrid/Mailgun
+   - Templates لكل notification type
+   - Unsubscribe links
+   - Respect user preferences
+
+6. Push Notifications:
+   - Web Push (Service Worker)
+   - استخدم Firebase Cloud Messaging (FCM)
+   - يدعم Web, iOS, Android
+   
+   Endpoints:
+   - POST /api/v1/notifications/register-push-token
+```json
+     {
+       "token": "xxx",
+       "platform": "web"
+     }
+```
+   
+   - DELETE /api/v1/notifications/push-tokens/:id
+
+7. User Preferences:
+   - GET /api/v1/notifications/preferences
+   - PUT /api/v1/notifications/preferences
+```json
+   {
+       "email_new_bid": true,
+       "push_outbid": false,
+       "in_app_enabled": true
+   }
+```
+
+8. Queue System:
+   - استخدم Redis Queue للـ async sending
+   - Worker process يرسل الإشعارات
+   - Retry logic
+   - Dead letter queue
+
+9. Implementation:
+```go
+   func (s *NotificationService) Send(userID int64, notif Notification) error {
+       // 1. Check user preferences
+       prefs, err := s.GetUserPreferences(userID)
+       if err != nil {
+           return err
+       }
+
+       // 2. Create in-app notification
+       if prefs.InAppEnabled {
+           err = s.createInAppNotification(userID, notif)
+           if err != nil {
+               log.Error("Failed to create in-app notification", err)
+           }
+       }
+
+       // 3. Send email (async)
+       if s.shouldSendEmail(notif.Type, prefs) {
+           s.queueEmailNotification(userID, notif)
+       }
+
+       // 4. Send push (async)
+       if s.shouldSendPush(notif.Type, prefs) {
+           s.queuePushNotification(userID, notif)
+       }
+
+       // 5. Send via WebSocket (real-time)
+       s.broadcastWebSocket(userID, notif)
+
+       return nil
+   }
+```
+
+10. Error Handling:
+    - Log all failures
+    - Retry failed emails (max 3 attempts)
+    - Alert admin on critical failures
+    - Deactivate invalid push tokens
+
+الكود يكون:
+- Scalable و production-ready
+- مع proper error handling
+- مع comprehensive logging
+- مع testing examples
+
+ابدأ التنفيذ خطوة بخطوة.
+
+👑 المرحلة 6: Admin Dashboard (Week 8-9)
+Task 6.1: Admin Panel - Core Features
+📝 Prompt جاهز:
+أنت full-stack expert تعمل على admin panel لـ GeoCore Next.
+
+السياق:
+- Backend: Go + Gin
+- Frontend: Next.js 15 + React 19 + shadcn/ui
+- المطلوب: Admin dashboard كامل
+
+المطلوب:
+
+PART 1: Backend APIs
+
+1. Admin Middleware:
+```go
+   func AdminOnly() gin.HandlerFunc {
+       return func(c *gin.Context) {
+           user := GetCurrentUser(c)
+           if user.Role != "admin" && user.Role != "super_admin" {
+               c.JSON(403, gin.H{"error": "admin access required"})
+               c.Abort()
+               return
+           }
+           c.Next()
+       }
+   }
+```
+
+2. Admin Endpoints:
+
+   A. Dashboard Stats:
+   GET /api/v1/admin/stats
+```json
+   {
+       "total_users": 15234,
+       "active_users_today": 1243,
+       "total_listings": 8932,
+       "active_listings": 7521,
+       "total_auctions": 432,
+       "live_auctions": 87,
+       "total_revenue": 125430.50,
+       "revenue_today": 3421.20,
+       "pending_moderation": 23,
+       "reports_pending": 12
+   }
+```
+
+   B. Users Management:
+   - GET /api/v1/admin/users
+     * Pagination, search, filters
+     * Filter by: role, status, registration_date
+   
+   - GET /api/v1/admin/users/:id
+     * User details + activity
+   
+   - PUT /api/v1/admin/users/:id
+     * Update user (role, status, etc.)
+   
+   - DELETE /api/v1/admin/users/:id
+     * Soft delete
+   
+   - POST /api/v1/admin/users/:id/ban
+     * Ban user + reason
+   
+   - POST /api/v1/admin/users/:id/unban
+
+   C. Listings Management:
+   - GET /api/v1/admin/listings
+     * All listings with filters
+     * Filter by: status, category, user, date
+   
+   - PUT /api/v1/admin/listings/:id/approve
+   
+   - PUT /api/v1/admin/listings/:id/reject
+     * مع reason
+   
+   - DELETE /api/v1/admin/listings/:id
+     * Hard delete
+
+   D. Reports Management:
+   - GET /api/v1/admin/reports
+     * All reports (listing, user)
+     * Filter by: type, status, date
+   
+   - GET /api/v1/admin/reports/:id
+   
+   - PUT /api/v1/admin/reports/:id/resolve
+     * Action taken + notes
+
+   E. Financial Reports:
+   - GET /api/v1/admin/revenue
+     * Daily, weekly, monthly revenue
+     * By category, by user
+   
+   - GET /api/v1/admin/transactions
+     * All payments
+     * Export to CSV
+
+3. Database:
+```sql
+   -- Add admin fields to users
+   ALTER TABLE users ADD COLUMN role VARCHAR(50) DEFAULT 'user'; -- user, admin, super_admin
+   ALTER TABLE users ADD COLUMN is_banned BOOLEAN DEFAULT FALSE;
+   ALTER TABLE users ADD COLUMN ban_reason TEXT;
+
+   -- Admin activity log
+   CREATE TABLE admin_logs (
+       id BIGSERIAL PRIMARY KEY,
+       admin_id BIGINT REFERENCES users(id),
+       action VARCHAR(100), -- ban_user, delete_listing, etc.
+       target_type VARCHAR(50), -- user, listing, auction
+       target_id BIGINT,
+       details JSONB,
+       ip_address INET,
+       created_at TIMESTAMP DEFAULT NOW()
+   );
+```
+
+PART 2: Frontend (Next.js)
+
+1. Pages Structure:
+app/
+├── admin/
+│   ├── layout.tsx (Admin layout with sidebar)
+│   ├── page.tsx (Dashboard)
+│   ├── users/
+│   │   ├── page.tsx (Users list)
+│   │   └── [id]/page.tsx (User details)
+│   ├── listings/
+│   │   ├── page.tsx (Listings list)
+│   │   └── [id]/page.tsx (Listing details)
+│   ├── reports/
+│   │   └── page.tsx
+│   ├── revenue/
+│   │   └── page.tsx
+│   └── settings/
+│       └── page.tsx
+
+2. Dashboard Components:
+   - Stats Cards (Total users, revenue, etc.)
+   - Charts (Revenue over time, User growth)
+   - Recent activity table
+   - Pending moderation queue
+   
+   استخدم:
+   - shadcn/ui components
+   - Recharts للـ charts
+   - React Query للـ data fetching
+
+3. Users Management UI:
+   - DataTable with:
+     * Search bar
+     * Filters (role, status)
+     * Sorting
+     * Pagination
+     * Bulk actions
+   - User details modal/page:
+     * Profile info
+     * Activity timeline
+     * Listings count
+     * Revenue generated
+     * Ban/Unban buttons
+
+4. Listings Moderation:
+   - Pending listings queue
+   - Preview listing
+   - Approve/Reject with reason
+   - Bulk approve/reject
+
+5. Reports Dashboard:
+   - List all reports
+   - Filter by type, status
+   - View report details
+   - Take action (delete content, ban user, etc.)
+   - Add notes
+
+6. Revenue Dashboard:
+   - Total revenue (today, week, month, year)
+   - Revenue chart (line/bar)
+   - Revenue by category (pie chart)
+   - Top sellers table
+   - Recent transactions table
+   - Export to CSV
+
+اكتب:
+- Complete Backend APIs
+- Frontend pages and components
+- مع proper error handling
+- مع loading states
+- مع responsive design
+- Production-ready code
+
+ابدأ بالـ Backend APIs أولاً، ثم Frontend.
+
+⚡ المرحلة 7: Testing & Optimization (Week 10)
+Task 7.1: Comprehensive Testing Suite
+📝 Prompt جاهز:
+أنت testing expert تعمل على GeoCore Next.
+
+السياق:
+- Go + Gin + GORM + PostgreSQL
+- المطلوب: Testing suite شامل
+
+المطلوب:
+
+1. Unit Tests:
+   
+   A. Test Structure:
+backend/
+├── internal/
+│   ├── auth/
+│   │   ├── auth.go
+│   │   └── auth_test.go
+│   ├── listings/
+│   │   ├── service.go
+│   │   └── service_test.go
+
+   B. Auth Tests:
+```go
+   func TestRegister(t *testing.T) {
+       // Test cases:
+       // - Valid registration
+       // - Duplicate email
+       // - Invalid email format
+       // - Weak password
+       // - Missing fields
+   }
+
+   func TestLogin(t *testing.T) {
+       // Test cases:
+       // - Valid login
+       // - Wrong password
+       // - User not found
+       // - Unverified email
+       // - Banned user
+   }
+
+   func TestJWTGeneration(t *testing.T) {
+       // Test JWT token generation
+   }
+
+   func TestJWTValidation(t *testing.T) {
+       // Test valid token
+       // Test expired token
+       // Test invalid signature
+   }
+```
+
+   C. Listings Tests:
+```go
+   func TestCreateListing(t *testing.T) {
+       // Valid creation
+       // Missing required fields
+       // Invalid price
+       // Unauthorized user
+   }
+
+   func TestSearchListings(t *testing.T) {
+       // Text search
+       // Price filters
+       // Location filters
+       // Category filters
+       // Sorting
+       // Pagination
+   }
+```
+
+2. Integration Tests:
+   
+   A. Database Tests:
+   - استخدم test database
+   - Setup/Teardown fixtures
+```go
+   func setupTestDB(t *testing.T) *gorm.DB {
+       db, err := gorm.Open(postgres.Open(
+           "postgresql://test:test@localhost:5432/geocore_test",
+       ), &gorm.Config{})
+       require.NoError(t, err)
+       
+       // Run migrations
+       db.AutoMigrate(&User{}, &Listing{}, &Auction{})
+       
+       return db
+   }
+
+   func teardownTestDB(t *testing.T, db *gorm.DB) {
+       // Clean up
+       db.Exec("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+   }
+```
+
+   B. API Integration Tests:
+```go
+   func TestAuthFlow(t *testing.T) {
+       // Full auth flow:
+       // 1. Register
+       // 2. Verify email
+       // 3. Login
+       // 4. Access protected endpoint
+   }
+
+   func TestListingFlow(t *testing.T) {
+       // 1. Create listing
+       // 2. Upload images
+       // 3. Search for listing
+       // 4. Update listing
+       // 5. Delete listing
+   }
+
+   func TestAuctionFlow(t *testing.T) {
+       // 1. Create auction
+       // 2. Place bid
+       // 3. Outbid
+       // 4. Auto-bid
+       // 5. Auction end
+   }
+```
+
+3. E2E Tests (Frontend):
+   - استخدم Playwright
+```typescript
+   // tests/e2e/auth.spec.ts
+   test('user can register and login', async ({ page }) => {
+       // Go to register page
+       await page.goto('/register');
+       
+       // Fill form
+       await page.fill('[name="email"]', 'test@example.com');
+       await page.fill('[name="password"]', 'SecurePass123');
+       await page.fill('[name="name"]', 'Test User');
+       
+       // Submit
+       await page.click('button[type="submit"]');
+       
+       // Should see success message
+       await expect(page.locator('text=Please verify your email')).toBeVisible();
+   });
+
+   test('user can create listing', async ({ page }) => {
+       // Login first
+       await login(page);
+       
+       // Go to create listing
+       await page.goto('/listings/create');
+       
+       // Fill form
+       await page.fill('[name="title"]', 'iPhone 15 Pro');
+       await page.fill('[name="description"]', 'Brand new iPhone...');
+       await page.fill('[name="price"]', '1000');
+       
+       // Upload image
+       await page.setInputFiles('[name="images"]', 'tests/fixtures/iphone.jpg');
+       
+       // Submit
+       await page.click('button[type="submit"]');
+       
+       // Should redirect to listing page
+       await expect(page).toHaveURL(/\/listings\/\d+/);
+   });
+```
+
+4. Load Testing:
+   - استخدم k6
+```javascript
+   // tests/load/listings_search.js
+   import http from 'k6/http';
+   import { check, sleep } from 'k6';
+
+   export let options = {
+       stages: [
+           { duration: '2m', target: 100 }, // Ramp up to 100 users
+           { duration: '5m', target: 100 }, // Stay at 100 users
+           { duration: '2m', target: 0 },   // Ramp down
+       ],
+       thresholds: {
+           http_req_duration: ['p(95)<500'], // 95% of requests < 500ms
+           http_req_failed: ['rate<0.01'],   // Error rate < 1%
+       },
+   };
+
+   export default function () {
+       let response = http.get('http://localhost:8080/api/v1/listings/search?q=iphone');
+       
+       check(response, {
+           'status is 200': (r) => r.status === 200,
+           'response time < 500ms': (r) => r.timings.duration < 500,
+       });
+       
+       sleep(1);
+   }
+```
+
+5. Test Coverage:
+   - Target: 80%+ coverage
+```bash
+   # Run tests with coverage
+   go test ./... -coverprofile=coverage.out
+   go tool cover -html=coverage.out
+```
+
+6. CI/CD Integration:
+```yaml
+   # .github/workflows/test.yml
+   name: Tests
+
+   on: [push, pull_request]
+
+   jobs:
+     test:
+       runs-on: ubuntu-latest
+       services:
+         postgres:
+           image: postgres:16
+           env:
+             POSTGRES_PASSWORD: test
+           options: >-
+             --health-cmd pg_isready
+             --health-interval 10s
+       steps:
+         - uses: actions/checkout@v3
+         - uses: actions/setup-go@v4
+           with:
+             go-version: '1.23'
+         
+         - name: Run Unit Tests
+           run: go test ./... -v
+         
+         - name: Run Integration Tests
+           run: go test ./... -tags=integration -v
+         
+         - name: Upload Coverage
+           uses: codecov/codecov-action@v3
+```
+
+7. Mock Services:
+```go
+   // Mock Stripe for testing
+   type MockStripeService struct{}
+
+   func (m *MockStripeService) CreatePaymentIntent(...) (*stripe.PaymentIntent, error) {
+       return &stripe.PaymentIntent{
+           ID: "pi_test_123",
+           Status: "succeeded",
+       }, nil
+   }
+```
+
+8. Test Data Factories:
+```go
+   // Test helpers
+   func CreateTestUser(db *gorm.DB) *User {
+       user := &User{
+           Email: fmt.Sprintf("test%d@example.com", time.Now().Unix()),
+           Password: "hashed_password",
+           Name: "Test User",
+           EmailVerified: true,
+       }
+       db.Create(user)
+       return user
+   }
+
+   func CreateTestListing(db *gorm.DB, userID int64) *Listing {
+       listing := &Listing{
+           UserID: userID,
+           Title: "Test Listing",
+           Description: "Test description",
+           Price: 100.00,
+           Status: "active",
+       }
+       db.Create(listing)
+       return listing
+   }
+```
+
+اكتب:
+- Unit tests لكل module
+- Integration tests للـ critical flows
+- E2E tests للـ user journeys
+- Load tests للـ performance
+- Test documentation
+
+ابدأ التنفيذ.
+
+🚀 المرحلة 8: Production Deployment (Week 11)
+Task 8.1: Production Setup & Deployment
+📝 Prompt جاهز:
+أنت DevOps expert تعمل على deploying GeoCore Next to production.
+
+السياق:
+- Go + Next.js + PostgreSQL + Redis
+- المطلوب: Production deployment كامل
+
+المطلوب:
+
+1. Docker Production Images:
+
+   A. Backend Dockerfile:
+```dockerfile
+   # backend/Dockerfile.prod
+   FROM golang:1.23-alpine AS builder
+
+   WORKDIR /app
+   COPY go.mod go.sum ./
+   RUN go mod download
+
+   COPY . .
+   RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd/api
+
+   FROM alpine:latest
+   RUN apk --no-cache add ca-certificates
+   WORKDIR /root/
+   COPY --from=builder /app/main .
+   EXPOSE 8080
+   CMD ["./main"]
+```
+
+   B. Frontend Dockerfile:
+```dockerfile
+   # frontend/Dockerfile.prod
+   FROM node:20-alpine AS builder
+
+   WORKDIR /app
+   COPY package*.json ./
+   RUN npm ci
+
+   COPY . .
+   RUN npm run build
+
+   FROM node:20-alpine
+   WORKDIR /app
+   COPY --from=builder /app/.next ./.next
+   COPY --from=builder /app/public ./public
+   COPY --from=builder /app/package*.json ./
+   RUN npm ci --only=production
+
+   EXPOSE 3000
+   CMD ["npm", "start"]
+```
+
+2. Kubernetes Manifests:
+
+   A. Namespace:
+```yaml
+   # k8s/namespace.yaml
+   apiVersion: v1
+   kind: Namespace
+   metadata:
+     name: geocore-prod
+```
+
+   B. ConfigMap:
+```yaml
+   # k8s/configmap.yaml
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: geocore-config
+     namespace: geocore-prod
+   data:
+     DB_HOST: postgres-service
+     DB_PORT: "5432"
+     DB_NAME: geocore
+     REDIS_HOST: redis-service
+     REDIS_PORT: "6379"
+```
+
+   C. Secrets:
+```yaml
+   # k8s/secret.yaml
+   apiVersion: v1
+   kind: Secret
+   metadata:
+     name: geocore-secrets
+     namespace: geocore-prod
+   type: Opaque
+   stringData:
+     DB_PASSWORD: <base64-encoded>
+     JWT_SECRET: <base64-encoded>
+     STRIPE_SECRET_KEY: <base64-encoded>
+```
+
+   D. Backend Deployment:
+```yaml
+   # k8s/backend-deployment.yaml
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: backend
+     namespace: geocore-prod
+   spec:
+     replicas: 3
+     selector:
+       matchLabels:
+         app: backend
+     template:
+       metadata:
+         labels:
+           app: backend
+       spec:
+         containers:
+         - name: backend
+           image: your-registry/geocore-backend:latest
+           ports:
+           - containerPort: 8080
+           env:
+           - name: DB_HOST
+             valueFrom:
+               configMapKeyRef:
+                 name: geocore-config
+                 key: DB_HOST
+           - name: DB_PASSWORD
+             valueFrom:
+               secretKeyRef:
+                 name: geocore-secrets
+                 key: DB_PASSWORD
+           resources:
+             requests:
+               memory: "256Mi"
+               cpu: "250m"
+             limits:
+               memory: "512Mi"
+               cpu: "500m"
+           livenessProbe:
+             httpGet:
+               path: /health
+               port: 8080
+             initialDelaySeconds: 30
+             periodSeconds: 10
+           readinessProbe:
+             httpGet:
+               path: /ready
+               port: 8080
+             initialDelaySeconds: 10
+             periodSeconds: 5
+```
+
+   E. Backend Service:
+```yaml
+   # k8s/backend-service.yaml
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: backend-service
+     namespace: geocore-prod
+   spec:
+     selector:
+       app: backend
+     ports:
+     - protocol: TCP
+       port: 8080
+       targetPort: 8080
+     type: ClusterIP
+```
+
+   F. Frontend Deployment & Service:
+```yaml
+   # k8s/frontend-deployment.yaml
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: frontend
+     namespace: geocore-prod
+   spec:
+     replicas: 2
+     selector:
+       matchLabels:
+         app: frontend
+     template:
+       metadata:
+         labels:
+           app: frontend
+       spec:
+         containers:
+         - name: frontend
+           image: your-registry/geocore-frontend:latest
+           ports:
+           - containerPort: 3000
+           env:
+           - name: NEXT_PUBLIC_API_URL
+             value: "https://api.geocore.com"
+   ---
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: frontend-service
+     namespace: geocore-prod
+   spec:
+     selector:
+       app: frontend
+     ports:
+     - protocol: TCP
+       port: 3000
+       targetPort: 3000
+```
+
+   G. Ingress (with SSL):
+```yaml
+   # k8s/ingress.yaml
+   apiVersion: networking.k8s.io/v1
+   kind: Ingress
+   metadata:
+     name: geocore-ingress
+     namespace: geocore-prod
+     annotations:
+       cert-manager.io/cluster-issuer: "letsencrypt-prod"
+       nginx.ingress.kubernetes.io/ssl-redirect: "true"
+   spec:
+     ingressClassName: nginx
+     tls:
+     - hosts:
+       - geocore.com
+       - api.geocore.com
+       secretName: geocore-tls
+     rules:
+     - host: geocore.com
+       http:
+         paths:
+         - path: /
+           pathType: Prefix
+           backend:
+             service:
+               name: frontend-service
+               port:
+                 number: 3000
+     - host: api.geocore.com
+       http:
+         paths:
+         - path: /
+           pathType: Prefix
+           backend:
+             service:
+               name: backend-service
+               port:
+                 number: 8080
+```
+
+   H. PostgreSQL (StatefulSet):
+```yaml
+   # k8s/postgres-statefulset.yaml
+   apiVersion: apps/v1
+   kind: StatefulSet
+   metadata:
+     name: postgres
+     namespace: geocore-prod
+   spec:
+     serviceName: postgres
+     replicas: 1
+     selector:
+       matchLabels:
+         app: postgres
+     template:
+       metadata:
+         labels:
+           app: postgres
+       spec:
+         containers:
+         - name: postgres
+           image: postgres:16
+           ports:
+           - containerPort: 5432
+           env:
+           - name: POSTGRES_DB
+             value: geocore
+           - name: POSTGRES_PASSWORD
+             valueFrom:
+               secretKeyRef:
+                 name: geocore-secrets
+                 key: DB_PASSWORD
+           volumeMounts:
+           - name: postgres-storage
+             mountPath: /var/lib/postgresql/data
+     volumeClaimTemplates:
+     - metadata:
+         name: postgres-storage
+       spec:
+         accessModes: ["ReadWriteOnce"]
+         resources:
+           requests:
+             storage: 50Gi
+```
+
+3. CI/CD Pipeline:
+```yaml
+   # .github/workflows/deploy.yml
+   name: Deploy to Production
+
+   on:
+     push:
+       branches: [main]
+
+   jobs:
+     deploy:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v3
+         
+         - name: Build Backend
+           run: docker build -t your-registry/geocore-backend:${{ github.sha }} -f backend/Dockerfile.prod backend/
+         
+         - name: Build Frontend
+           run: docker build -t your-registry/geocore-frontend:${{ github.sha }} -f frontend/Dockerfile.prod frontend/
+         
+         - name: Push Images
+           run: |
+             docker push your-registry/geocore-backend:${{ github.sha }}
+             docker push your-registry/geocore-frontend:${{ github.sha }}
+         
+         - name: Deploy to Kubernetes
+           run: |
+             kubectl set image deployment/backend backend=your-registry/geocore-backend:${{ github.sha }} -n geocore-prod
+             kubectl set image deployment/frontend frontend=your-registry/geocore-frontend:${{ github.sha }} -n geocore-prod
+             kubectl rollout status deployment/backend -n geocore-prod
+             kubectl rollout status deployment/frontend -n geocore-prod
+```
+
+4. Monitoring Setup:
+
+   A. Prometheus:
+```yaml
+   # k8s/prometheus.yaml
+   apiVersion: v1
+   kind: ConfigMap
+   metadata:
+     name: prometheus-config
+   data:
+     prometheus.yml: |
+       global:
+         scrape_interval: 15s
+       scrape_configs:
+         - job_name: 'backend'
+           kubernetes_sd_configs:
+             - role: pod
+           relabel_configs:
+             - source_labels: [__meta_kubernetes_pod_label_app]
+               action: keep
+               regex: backend
+```
+
+   B. Grafana Dashboards:
+   - API response times
+   - Error rates
+   - Database connections
+   - Redis stats
+   - CPU/Memory usage
+
+5. Logging:
+   - استخدم ELK Stack أو Loki
+   - Centralized logging
+   - Log retention: 30 days
+
+6. Backup Strategy:
+```bash
+   # Database backup (daily)
+   #!/bin/bash
+   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+   pg_dump -h $DB_HOST -U $DB_USER geocore > backup_$TIMESTAMP.sql
+   aws s3 cp backup_$TIMESTAMP.sql s3://geocore-backups/
+```
+
+7. Health Checks:
+```go
+   // Add health endpoints
+   router.GET("/health", func(c *gin.Context) {
+       c.JSON(200, gin.H{"status": "healthy"})
+   })
+
+   router.GET("/ready", func(c *gin.Context) {
+       // Check DB connection
+       // Check Redis connection
+       c.JSON(200, gin.H{"status": "ready"})
+   })
+```
+
+8. Environment-specific Configs:
+   - .env.production
+   - Separate secrets per environment
+   - Different resource limits
+
+اكتب:
+- Complete K8s manifests
+- CI/CD pipeline
+- Monitoring setup
+- Backup scripts
+- Deployment documentation
+
+ابدأ التنفيذ.
+
+📚 الملف الرئيسي للمشروع
+Master Tracking File
+📝 Prompt للملف:
+أنشئ ملف PROGRESS.md يتتبع تقدم المشروع:
+
+# GeoCore Next - Progress Tracker
+
+## ✅ Completed Tasks
+
+### Week 1-2: Security & Authentication
+- [x] Email Verification System
+- [x] Password Reset System
+- [x] Social Login (Google OAuth)
+- [x] Rate Limiting Middleware
+- [x] Input Validation & Sanitization
+
+### Week 3-4: Payment System
+- [ ] Stripe Integration - Complete Setup
+- [ ] Stripe Webhooks
+- [ ] Escrow System
+
+... (باقي المراحل)
+
+## 🔄 In Progress
+- Task name
+- Assigned to: AI Model / Developer
+- Started: Date
+- Blockers: None
+
+## 📋 Next Up
+1. Task name
+2. Task name
+
+## 🐛 Known Issues
+- Issue description
+- Priority: High/Medium/Low
+- Status: Open/In Progress/Resolved
+
+## 📊 Metrics
+- Total tasks: 50
+- Completed: 15 (30%)
+- In Progress: 3
+- Remaining: 32
+
+## 🎯 Milestones
+- [ ] MVP Ready (Week 6)
+- [ ] Beta Launch (Week 10)
+- [ ] Production Launch (Week 12)

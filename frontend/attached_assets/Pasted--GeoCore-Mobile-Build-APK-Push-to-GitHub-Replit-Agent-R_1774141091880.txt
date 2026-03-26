@@ -1,0 +1,215 @@
+# GeoCore Mobile — Build APK + Push to GitHub
+> ابعت لـ Replit Agent بعد ما يخلص بناء الـ React Native app
+
+---
+
+## Step 1 — Verify App is Working
+
+```bash
+# Make sure everything compiles
+cd mobile
+npx expo export --platform android
+
+# Check for TypeScript errors
+npx tsc --noEmit
+```
+
+Fix any errors before continuing.
+
+---
+
+## Step 2 — Connect to EAS
+
+```bash
+# Login to Expo
+npx eas-cli login
+
+# Link to project
+npx eas-cli init
+```
+
+---
+
+## Step 3 — Build APK (Android)
+
+```bash
+# Build internal APK for testing
+eas build --platform android --profile preview --non-interactive
+```
+
+This will:
+- Upload code to Expo servers
+- Build a real APK file
+- Give you a download link
+
+**Save the APK download link.**
+
+---
+
+## Step 4 — Test the APK
+
+Download the APK and install on Android phone:
+```
+Settings → Security → Allow unknown sources → Install APK
+```
+
+Verify these work:
+- [ ] App opens without crash
+- [ ] Home screen loads with blue header + yellow logo
+- [ ] Categories scroll horizontally
+- [ ] Listings show with AUCTION/BUY NOW badges
+- [ ] Countdown timers are live and counting
+- [ ] Bottom nav shows floating yellow + button
+- [ ] Login screen works
+- [ ] Can browse listings without login
+
+---
+
+## Step 5 — Push to GitHub
+
+```bash
+cd mobile
+
+# Make sure .gitignore is correct
+cat > .gitignore << 'EOF'
+node_modules/
+.expo/
+dist/
+build/
+*.jks
+*.keystore
+.env
+.env.local
+ios/
+android/
+EOF
+
+# Push to GitHub under /mobile folder
+git init
+git add .
+git commit -m "feat: React Native mobile app v1.0
+- eBay-style UI with Walmart colors (#0071CE + #FFC220)
+- Home: Search bar + Categories + Live Auctions + Listings grid
+- AUCTION/BUY NOW badges on every card
+- Live countdown timers on auctions
+- Floating yellow Sell button
+- JWT auth with secure token storage
+- EAS Build ready (APK + IPA)"
+
+git remote add origin https://github.com/hossam-create/geocore-next.git
+git push origin main
+```
+
+---
+
+## Step 6 — Update TASKS.md in Main Repo
+
+After pushing, update the root `TASKS.md`:
+
+```bash
+cd ..  # go back to root geocore-next folder
+
+# Add these lines to TASKS.md under EPIC 10 — Mobile
+cat >> TASKS.md << 'EOF'
+
+## TASK-099: React Native Mobile App
+**Status:** ✅ Done
+**Type:** feature
+**Priority:** P1
+
+### What was built
+- React Native + Expo SDK 50
+- TypeScript strict mode
+- eBay-style UI with Walmart colors
+- EAS Build configured for APK + IPA
+
+### Screens
+- HomeScreen (search + categories + auctions + listings grid)
+- ListingDetailScreen
+- AuctionsScreen with live bidding
+- SearchScreen with filters
+- CreateListingScreen
+- ChatScreen with WebSocket
+- ProfileScreen
+- LoginScreen + RegisterScreen
+
+### Components
+- ListingCard (AUCTION/BUY NOW badges)
+- AuctionCard (live countdown)
+- CountdownTimer (updates every second)
+- SearchBar
+
+### Build
+- APK: eas build --platform android --profile preview
+- IPA: eas build --platform ios --profile production
+
+## TASK-100: App Store Submission
+**Status:** ❌ Not Started
+**Type:** chore
+**Priority:** P2
+**Depends on:** TASK-099
+
+### Description
+Submit app to Google Play Store and Apple App Store.
+
+### Requirements
+- Google Play Developer account ($25 one-time)
+- Apple Developer account ($99/year)
+- App icons (1024x1024)
+- Screenshots for all screen sizes
+- App description in EN + AR
+- Privacy policy URL
+EOF
+
+git add TASKS.md
+git commit -m "chore: update TASKS.md — mobile app done, add store submission task"
+git push origin main
+```
+
+---
+
+## Step 7 — Final Report
+
+After everything is done, report:
+
+```
+═══════════════════════════════════════
+GEOCORE MOBILE — BUILD REPORT
+═══════════════════════════════════════
+
+APK Status:     [Built / Failed]
+APK Download:   [URL]
+APK Size:       [MB]
+
+GitHub Push:    [✅ / ❌]
+Branch:         main
+Folder:         /mobile
+
+Screens Built:
+✅ HomeScreen
+✅ ListingDetailScreen
+✅ AuctionsScreen
+✅ SearchScreen
+✅ CreateListingScreen
+✅ ChatScreen
+✅ ProfileScreen
+✅ LoginScreen
+✅ RegisterScreen
+
+Components:
+✅ ListingCard (with badges)
+✅ AuctionCard (with countdown)
+✅ CountdownTimer (live)
+✅ SearchBar
+
+Features:
+✅ Walmart colors (#0071CE + #FFC220)
+✅ AUCTION / BUY NOW badges
+✅ Live countdown timers
+✅ Floating yellow Sell button
+✅ JWT auth + secure storage
+✅ Auto token refresh
+
+Next Step: App Store submission (TASK-100)
+═══════════════════════════════════════
+```

@@ -1,0 +1,10 @@
+# Compiled binaries
+/api
+/server
+nohup.out
+
+# Test artifacts
+*.test
+
+# Go build cache
+/vendor/

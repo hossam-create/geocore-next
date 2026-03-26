@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: geocore-api
+    namespace: geocore
+    labels:
+      app: geocore-api
+      tier: backend
+      version: "1.0"
+  spec:
+    replicas: 2
+    selector:
+      matchLabels:
+        app: geocore-api
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0          # Zero-downtime deployments
+    template:
+      metadata:
+        labels:
+          app: geocore-api
+          tier: backend
+      spec:
+        terminationGracePeriodSeconds: 30
+        containers:
+          - name: api
+            image: ghcr.io/hossam-create/geocore-api:latest
+            imagePullPolicy: Always
+            ports:
+              - containerPort: 8080
+                name: http
+            envFrom:
+              - configMapRef:
+                  name: geocore-config
+              - secretRef:
+                  name: geocore-secrets
+            resources:
+              requests:
+                cpu: "250m"
+                memory: "256Mi"
+              limits:
+                cpu: "1000m"
+                memory: "512Mi"
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8080
+              initialDelaySeconds: 15
+              periodSeconds: 20
+              timeoutSeconds: 5
+              failureThreshold: 3
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8080
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              timeoutSeconds: 3
+            lifecycle:
+              preStop:
+                exec:
+                  command: ["/bin/sh", "-c", "sleep 5"]
+  

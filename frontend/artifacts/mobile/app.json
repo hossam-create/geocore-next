@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "GeoCore",
+    "slug": "geocore-next",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "geocore",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0071CE"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.geocore.next"
+    },
+    "android": {
+      "package": "com.geocore.next",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#0071CE"
+      }
+    },
+    "web": {
+      "favicon": "./assets/images/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://replit.com/"
+        }
+      ],
+      "expo-font",
+      "expo-web-browser",
+      "expo-secure-store",
+      "expo-apple-authentication"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "apiBaseUrl": "https://geo-core-next.replit.app/api/v1"
+    }
+  }
+}

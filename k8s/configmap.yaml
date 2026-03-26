@@ -1,0 +1,17 @@
+apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: geocore-config
+    namespace: geocore-prod
+  data:
+    APP_ENV: "production"
+    PORT: "8080"
+    DB_HOST: "postgres-svc.geocore-prod.svc.cluster.local"
+    DB_PORT: "5432"
+    DB_NAME: "geocore"
+    DB_USER: "geocore"
+    DB_SSLMODE: "require"
+    REDIS_HOST: "redis-svc.geocore-prod.svc.cluster.local"
+    REDIS_PORT: "6379"
+    FRONTEND_URL: "https://geocore.app"
+  

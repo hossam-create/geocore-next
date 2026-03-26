@@ -1,0 +1,444 @@
+# GeoCore Next — Missing Features Implementation Prompt
+> ابعت لـ Cursor أو Replit Agent
+
+---
+
+## Context
+
+You are implementing missing features in **GeoCore Next** — a modern Go + Next.js rebuild of a legacy PHP classifieds & auctions platform.
+
+**Working repo:** https://github.com/hossam-create/geocore-next
+
+You have been given two reference documents:
+1. `geocore-feature-analysis.md` — مقارنة شاملة بين الأصلي PHP والـ rebuild
+2. `geocore-roadmap.md` — خريطة الطريق مع التفاصيل التقنية
+
+**Upload both files to your context before starting.**
+
+---
+
+## Before You Write a Single Line
+
+Read these files from the repo first:
+```
+CLAUDE.md          ← architecture rules (MUST follow)
+TASKS.md           ← existing tasks (don't duplicate)
+backend/internal/listings/model.go
+backend/internal/auctions/model.go
+backend/internal/users/model.go
+backend/pkg/database/database.go
+backend/pkg/response/response.go
+```
+
+**Non-negotiable rules from CLAUDE.md:**
+- Always use `response.OK(c, data)` — never `c.JSON` directly
+- Always `fmt.Errorf("funcName: %w", err)` for errors
+- Transactions for multi-table writes
+- `user_id` from context is a string → always `uuid.Parse()`
+- No business logic in handlers
+
+---
+
+## TASK-101: Dutch Auction
+
+**What is it:**
+Multiple identical items for auction. Multiple winners. All winners pay the LOWEST winning bid price.
+
+Example: Seller has 5 iPhones → 10 people bid → top 5 bidders win → ALL pay the price of the 5th highest bid.
+
+**Files to modify:**
+- `backend/internal/auctions/model.go`
+- `backend/internal/auctions/handler.go`
+- `backend/internal/auctions/routes.go`
+
+**Changes:**
+
+```go
+// In model.go — add to Auction struct:
+AuctionType  string `gorm:"default:standard;index" json:"auction_type"`
+// Values: standard | dutch | reverse | buy_now_only
+Quantity     int    `gorm:"default:1" json:"quantity"`
+QuantityLeft int    `gorm:"default:1" json:"quantity_left"`
+
+// New model for Dutch auction winners:
+type AuctionWinner struct {
+    ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
+    AuctionID uuid.UUID `gorm:"type:uuid;not null;index"`
+    UserID    uuid.UUID `gorm:"type:uuid;not null;index"`
+    BidAmount float64   `json:"bid_amount"`
+    FinalPrice float64  `json:"final_price"` // lowest winning bid
+    Rank      int       `json:"rank"`
+    CreatedAt time.Time
+}
+```
+
+**Dutch Auction PlaceBid logic:**
+```go
+// In handler.go — update PlaceBid to handle dutch:
+if auction.AuctionType == "dutch" {
+    // Get top N bids where N = auction.Quantity
+    // The clearing price = Nth highest bid
+    // All top N bidders win at clearing price
+    // If new bid enters top N → update clearing price
+    // broadcast: {type:"dutch_update", clearing_price, winners_count, quantity}
+}
+```
+
+**New endpoint:** `GET /api/v1/auctions/:id/winners` — returns current winners for dutch/ended auctions
+
+**Commit:** `git commit -m "feat(auctions): add Dutch, Reverse, Buy-Now-Only auction types"`
+
+---
+
+## TASK-102: Reverse Auction
+
+**What is it:**
+Buyer posts what they need and a budget. Sellers compete by offering LOWER prices. Lowest seller wins.
+
+Example: "I need a logo design, budget $200" → Designers bid $150, $120, $90 → $90 wins.
+
+**Changes:**
+```go
+// Reverse auction: price goes DOWN with each bid
+// In PlaceBid:
+if auction.AuctionType == "reverse" {
+    // Validate: req.Amount < auction.CurrentBid (LOWER is better)
+    // seller_id = req.UserID (sellers bid, not buyers)
+    // buyer_id = auction.SellerID (the original poster is the buyer)
+    minBid = auction.CurrentBid // must be LOWER
+    if req.Amount >= minBid {
+        response.BadRequest(c, fmt.Sprintf("Reverse auction: bid must be lower than %.2f", minBid))
+        return
+    }
+}
+```
+
+**Commit:** `git commit -m "feat(auctions): reverse auction bidding logic"`
+
+---
+
+## TASK-103: Category Custom Fields
+
+**What is it:**
+Each category has its own set of custom fields.
+- 🚗 Vehicles → Make, Model, Year, Mileage, Color
+- 🏠 Real Estate → Bedrooms, Bathrooms, Area, Floor
+- 📱 Electronics → Brand, Storage, RAM, Condition
+- 💼 Jobs → Job Type, Salary, Experience Level
+
+**New file:** `backend/internal/categories/model.go`
+```go
+package categories
+
+import (
+    "github.com/google/uuid"
+    "time"
+)
+
+type CategoryField struct {
+    ID           uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+    CategoryID   uuid.UUID `gorm:"type:uuid;not null;index" json:"category_id"`
+    Name         string    `gorm:"not null" json:"name"`         // "make"
+    Label        string    `gorm:"not null" json:"label"`        // "Make"
+    LabelAr      string    `json:"label_ar"`                     // "الماركة"
+    FieldType    string    `gorm:"default:text" json:"field_type"` // text|number|select|checkbox|date|textarea
+    Options      string    `gorm:"type:jsonb" json:"options"`    // ["Toyota","Honda","BMW"]
+    IsRequired   bool      `gorm:"default:false" json:"is_required"`
+    IsSearchable bool      `gorm:"default:false" json:"is_searchable"` // show in search filters
+    SortOrder    int       `gorm:"default:0" json:"sort_order"`
+    IsActive     bool      `gorm:"default:true" json:"is_active"`
+    CreatedAt    time.Time `json:"created_at"`
+}
+```
+
+**New file:** `backend/internal/categories/handler.go`
+```go
+// Endpoints:
+// GET    /api/v1/categories/:id/fields          — public: get fields for a category
+// POST   /api/v1/admin/categories/:id/fields    — admin only: create field
+// PUT    /api/v1/admin/categories/:id/fields/:fid — admin only: update
+// DELETE /api/v1/admin/categories/:id/fields/:fid — admin only: delete
+```
+
+**Update database.go AutoMigrate:**
+```go
+// Add to the AutoMigrate list:
+&categories.CategoryField{},
+```
+
+**Seed default fields** in `backend/internal/categories/seed.go`:
+```go
+func SeedCategoryFields(db *gorm.DB) {
+    // Get category IDs by slug, then seed fields
+    vehicleFields := []CategoryField{
+        {Name: "make", Label: "Make", LabelAr: "الماركة", FieldType: "select",
+         Options: `["Toyota","Honda","BMW","Mercedes","Ford","Hyundai","Kia","Nissan","Other"]`,
+         IsRequired: true, IsSearchable: true, SortOrder: 1},
+        {Name: "model", Label: "Model", LabelAr: "الموديل", FieldType: "text",
+         IsRequired: true, IsSearchable: true, SortOrder: 2},
+        {Name: "year", Label: "Year", LabelAr: "سنة الصنع", FieldType: "number",
+         IsRequired: true, IsSearchable: true, SortOrder: 3},
+        {Name: "mileage", Label: "Mileage (km)", LabelAr: "المسافة المقطوعة", FieldType: "number",
+         IsSearchable: true, SortOrder: 4},
+        {Name: "color", Label: "Color", LabelAr: "اللون", FieldType: "select",
+         Options: `["White","Black","Silver","Red","Blue","Green","Other"]`,
+         SortOrder: 5},
+    }
+    realEstateFields := []CategoryField{
+        {Name: "bedrooms", Label: "Bedrooms", LabelAr: "غرف النوم", FieldType: "number",
+         IsRequired: true, IsSearchable: true, SortOrder: 1},
+        {Name: "bathrooms", Label: "Bathrooms", LabelAr: "الحمامات", FieldType: "number",
+         IsSearchable: true, SortOrder: 2},
+        {Name: "area", Label: "Area (sqm)", LabelAr: "المساحة", FieldType: "number",
+         IsSearchable: true, SortOrder: 3},
+        {Name: "furnished", Label: "Furnished", LabelAr: "مفروش", FieldType: "select",
+         Options: `["Furnished","Semi-Furnished","Unfurnished"]`,
+         IsSearchable: true, SortOrder: 4},
+        {Name: "floor", Label: "Floor", LabelAr: "الطابق", FieldType: "number",
+         SortOrder: 5},
+    }
+    electronicsFields := []CategoryField{
+        {Name: "brand", Label: "Brand", LabelAr: "الماركة", FieldType: "select",
+         Options: `["Apple","Samsung","Huawei","Xiaomi","Sony","LG","Other"]`,
+         IsSearchable: true, SortOrder: 1},
+        {Name: "storage", Label: "Storage", LabelAr: "التخزين", FieldType: "select",
+         Options: `["16GB","32GB","64GB","128GB","256GB","512GB","1TB"]`,
+         IsSearchable: true, SortOrder: 2},
+        {Name: "ram", Label: "RAM", LabelAr: "الرام", FieldType: "select",
+         Options: `["2GB","4GB","6GB","8GB","12GB","16GB","32GB"]`,
+         SortOrder: 3},
+    }
+    jobsFields := []CategoryField{
+        {Name: "job_type", Label: "Job Type", LabelAr: "نوع الوظيفة", FieldType: "select",
+         Options: `["Full-time","Part-time","Freelance","Contract","Internship"]`,
+         IsRequired: true, IsSearchable: true, SortOrder: 1},
+        {Name: "salary_min", Label: "Min Salary", LabelAr: "الراتب الأدنى", FieldType: "number",
+         IsSearchable: true, SortOrder: 2},
+        {Name: "salary_max", Label: "Max Salary", LabelAr: "الراتب الأقصى", FieldType: "number",
+         SortOrder: 3},
+        {Name: "experience", Label: "Experience", LabelAr: "الخبرة", FieldType: "select",
+         Options: `["No Experience","1-2 years","3-5 years","5+ years","10+ years"]`,
+         IsSearchable: true, SortOrder: 4},
+        {Name: "remote", Label: "Work Type", LabelAr: "نوع العمل", FieldType: "select",
+         Options: `["On-site","Remote","Hybrid"]`,
+         IsSearchable: true, SortOrder: 5},
+    }
+    // Seed all field groups...
+}
+```
+
+**Commit:** `git commit -m "feat(categories): custom fields per category with seed data"`
+
+---
+
+## TASK-104: Radius/ZIP Search (PostGIS)
+
+**PostGIS is already installed** ✅ — just need to use it.
+
+**Update** `backend/internal/listings/handler.go` List():
+```go
+// Add to the search query builder:
+if lat := c.Query("lat"); lat != "" {
+    lng := c.Query("lng")
+    radius := c.DefaultQuery("radius", "50") // km
+    if lat != "" && lng != "" {
+        q = q.Where(
+            "ST_DWithin(ST_MakePoint(longitude, latitude)::geography, ST_MakePoint(?, ?)::geography, ?)",
+            lng, lat, radius+"000", // convert km to meters
+        )
+    }
+}
+```
+
+**Also add** `detect-location` endpoint in `backend/internal/users/handler.go`:
+```go
+// GET /api/v1/detect-location (no auth required)
+func (h *Handler) DetectLocation(c *gin.Context) {
+    ip := c.ClientIP()
+    // call ip-api.com/json/{ip}
+    // return {country, city, lat, lon}
+}
+```
+
+**Commit:** `git commit -m "feat(listings): PostGIS radius search + IP geolocation"`
+
+---
+
+## TASK-105: Listing Slugs (SEO URLs)
+
+**Update** `backend/internal/listings/model.go`:
+```go
+// Add to Listing struct:
+Slug string `gorm:"uniqueIndex;size:300" json:"slug"`
+```
+
+**Update** `backend/internal/listings/handler.go` Create():
+```go
+// Auto-generate slug after creating listing:
+import "regexp"
+import "strings"
+
+func generateSlug(title, city string, id uuid.UUID) string {
+    // "iPhone 15 Pro Max" → "iphone-15-pro-max"
+    slug := strings.ToLower(title)
+    re := regexp.MustCompile(`[^a-z0-9]+`)
+    slug = re.ReplaceAllString(slug, "-")
+    slug = strings.Trim(slug, "-")
+    // Add city + short ID to ensure uniqueness
+    citySlug := strings.ToLower(re.ReplaceAllString(city, "-"))
+    shortID := id.String()[:8]
+    return fmt.Sprintf("%s-%s-%s", slug, citySlug, shortID)
+}
+// Set listing.Slug = generateSlug(req.Title, req.City, listing.ID)
+```
+
+**Add route alias** in `backend/internal/listings/routes.go`:
+```go
+// Public alias route (no auth needed)
+listings.GET("/slug/:slug", h.GetBySlug)
+```
+
+**Commit:** `git commit -m "feat(listings): SEO-friendly slugs auto-generated on create"`
+
+---
+
+## TASK-106: Price Plans + User Groups
+
+**New file:** `backend/internal/pricing/model.go`
+```go
+package pricing
+
+type PricePlan struct {
+    ID                    uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+    Name                  string    `gorm:"not null" json:"name"`
+    Type                  string    `gorm:"default:free" json:"type"` // free|fee|subscription
+    ListingFee            float64   `gorm:"default:0" json:"listing_fee"`
+    FeaturedFee7d         float64   `gorm:"default:5" json:"featured_fee_7d"`
+    FeaturedFee30d        float64   `gorm:"default:15" json:"featured_fee_30d"`
+    FinalValueFeePercent  float64   `gorm:"default:0" json:"final_value_fee_percent"`
+    MaxListings           int       `gorm:"default:-1" json:"max_listings"` // -1 = unlimited
+    MaxImagesPerListing   int       `gorm:"default:10" json:"max_images"`
+    AuctionAllowed        bool      `gorm:"default:true" json:"auction_allowed"`
+    DutchAuctionAllowed   bool      `gorm:"default:false" json:"dutch_auction_allowed"`
+    SubscriptionPrice     float64   `gorm:"default:0" json:"subscription_price"`
+    BillingPeriod         string    `gorm:"default:monthly" json:"billing_period"`
+    Currency              string    `gorm:"default:USD" json:"currency"`
+    IsActive              bool      `gorm:"default:true" json:"is_active"`
+    CreatedAt             time.Time `json:"created_at"`
+}
+
+type UserGroup struct {
+    ID          uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+    Name        string    `gorm:"not null;uniqueIndex" json:"name"`
+    PricePlanID uuid.UUID `gorm:"type:uuid" json:"price_plan_id"`
+    IsDefault   bool      `gorm:"default:false" json:"is_default"`
+    IsActive    bool      `gorm:"default:true" json:"is_active"`
+    SortOrder   int       `gorm:"default:0" json:"sort_order"`
+    PricePlan   *PricePlan `gorm:"foreignKey:PricePlanID" json:"price_plan,omitempty"`
+}
+```
+
+**Update** `backend/internal/users/model.go`:
+```go
+// Add to User struct:
+UserGroupID *uuid.UUID `gorm:"type:uuid" json:"user_group_id,omitempty"`
+```
+
+**Seed default plans:**
+```go
+func SeedPricePlans(db *gorm.DB) {
+    // Plan 1: Free (default)
+    // Plan 2: Basic ($9.99/mo, 20 listings)
+    // Plan 3: Pro ($29.99/mo, unlimited)
+    // Plan 4: Business ($99.99/mo, unlimited + dutch auctions)
+    
+    // Group 1: Free Users → Free plan (default for new registrations)
+    // Group 2: Basic Sellers → Basic plan
+    // Group 3: Pro Sellers → Pro plan
+    // Group 4: Business → Business plan
+    // Group 5: Admin → Pro plan
+}
+```
+
+**Commit:** `git commit -m "feat(pricing): price plans + user groups system"`
+
+---
+
+## TASK-107: Anonymous Listings
+
+**What is it:**
+Allow posting listings WITHOUT registration — just email verification.
+Like Craigslist.
+
+**New model** in `backend/internal/listings/model.go`:
+```go
+type AnonymousToken struct {
+    ID        uuid.UUID  `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()"`
+    ListingID uuid.UUID  `gorm:"type:uuid;not null;uniqueIndex"`
+    Email     string     `gorm:"not null"`
+    Token     string     `gorm:"uniqueIndex;not null"` // secret UUID
+    ExpiresAt time.Time
+    CreatedAt time.Time
+}
+```
+
+**New endpoint:**
+```
+POST /api/v1/listings/anonymous
+Body: {title, description, price, category_id, country, city, email}
+→ Creates listing with status="pending"
+→ Sends email with manage link
+→ Admin must approve before it goes live
+```
+
+**Manage endpoint (no auth, token-based):**
+```
+GET    /api/v1/listings/anonymous/:token — view listing
+PUT    /api/v1/listings/anonymous/:token — edit
+DELETE /api/v1/listings/anonymous/:token — delete
+```
+
+**Commit:** `git commit -m "feat(listings): anonymous listings with email token management"`
+
+---
+
+## After Each Task
+
+```bash
+# Run before committing:
+cd backend
+go build ./...       # must pass
+go vet ./...         # must pass
+
+# Commit:
+git add .
+git commit -m "TASK-XXX: [description]"
+git push origin main
+```
+
+---
+
+## Final Report Format
+
+After completing all tasks, output:
+
+```
+═══════════════════════════════════════
+GEOCORE NEXT — MISSING FEATURES REPORT
+═══════════════════════════════════════
+
+TASK-101 Dutch Auction:        ✅ Done | ❌ Failed
+TASK-102 Reverse Auction:      ✅ Done | ❌ Failed
+TASK-103 Custom Fields:        ✅ Done | ❌ Failed
+TASK-104 Radius Search:        ✅ Done | ❌ Failed
+TASK-105 SEO Slugs:            ✅ Done | ❌ Failed
+TASK-106 Price Plans:          ✅ Done | ❌ Failed
+TASK-107 Anonymous Listings:   ✅ Done | ❌ Failed
+
+go build ./...: PASS / FAIL
+go vet ./...:   PASS / FAIL
+
+GitHub commits: [list]
+Next tasks: TASK-111 (Storefront), TASK-112 (Account Balance)
+═══════════════════════════════════════
+```

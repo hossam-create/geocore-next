@@ -1,0 +1,496 @@
+# GeoCore — Mobile App UI Redesign Prompt
+> انسخ وابعت لـ Replit Agent
+
+---
+
+## Mission
+
+Completely redesign the GeoCore mobile app UI to look and feel like **eBay** but with **Walmart colors** (Blue #0071CE + Yellow #FFC220).
+
+Do NOT change any business logic or API calls — only redesign the UI/UX.
+
+---
+
+## Color System
+
+```javascript
+const colors = {
+  primary: '#0071CE',      // Walmart Blue
+  secondary: '#FFC220',    // Walmart Yellow
+  background: '#F5F5F5',   // Light gray background
+  white: '#FFFFFF',
+  dark: '#1A1A1A',
+  gray: '#888888',
+  lightGray: '#E8E8E8',
+  success: '#4CAF50',
+  danger: '#E53935',
+  
+  // Badges
+  auctionBadge: '#E53935',     // Red for auctions
+  buyNowBadge: '#0071CE',      // Blue for buy now
+  featuredBadge: '#FFC220',    // Yellow for featured
+}
+```
+
+---
+
+## Screen 1 — Home Screen (Priority #1)
+
+Redesign to look exactly like this structure:
+
+```
+┌─────────────────────────────────┐
+│  🔵 GeoCore        🔔  👤       │  ← Blue header
+├─────────────────────────────────┤
+│ ┌─────────────────────────────┐ │
+│ │ 🔍  Search for anything...  │ │  ← Big white search bar
+│ └─────────────────────────────┘ │
+├─────────────────────────────────┤
+│  Categories                     │
+│  ┌──┐ ┌──┐ ┌──┐ ┌──┐ ┌──┐     │
+│  │🚗│ │🏠│ │📱│ │👕│ │🛋️│ →  │  ← Horizontal scroll
+│  │Car│ │Re│ │El│ │Cl│ │Fu│     │  with icon + label
+│  └──┘ └──┘ └──┘ └──┘ └──┘     │
+├─────────────────────────────────┤
+│  ⚡ Live Auctions              →│
+│  ┌────────┐  ┌────────┐        │
+│  │ [IMG]  │  │ [IMG]  │        │  ← Horizontal scroll
+│  │⏰ 2:34 │  │⏰ 0:58 │        │  auction cards
+│  │$450    │  │$1,200  │        │  with countdown
+│  └────────┘  └────────┘        │
+├─────────────────────────────────┤
+│  Featured Listings              │
+│  ┌──────┐  ┌──────┐            │
+│  │[IMG] │  │[IMG] │            │  ← 2-column grid
+│  │[BUY] │  │[AUC] │            │  like eBay
+│  │$120  │  │$89   │            │
+│  └──────┘  └──────┘            │
+│  ┌──────┐  ┌──────┐            │
+│  │[IMG] │  │[IMG] │            │
+│  │[BUY] │  │[AUC] │            │
+│  │$45   │  │$230  │            │
+│  └──────┘  └──────┘            │
+└─────────────────────────────────┘
+│  🏠    🔨    💬    ❤️    👤   │  ← Bottom nav
+└─────────────────────────────────┘
+```
+
+### Header Component
+```jsx
+<View style={{ backgroundColor: '#0071CE', padding: 16 }}>
+  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+    <Text style={{ color: '#FFC220', fontSize: 22, fontWeight: 'bold' }}>
+      GeoCore
+    </Text>
+    <View style={{ flexDirection: 'row', gap: 16 }}>
+      <BellIcon color="white" />
+      <UserIcon color="white" />
+    </View>
+  </View>
+  
+  {/* Search Bar */}
+  <TouchableOpacity style={{
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8
+  }}>
+    <SearchIcon color="#888" size={20} />
+    <Text style={{ color: '#888', fontSize: 16 }}>Search for anything...</Text>
+  </TouchableOpacity>
+</View>
+```
+
+### Categories Horizontal Scroll
+```jsx
+const categories = [
+  { icon: '🚗', label: 'Vehicles' },
+  { icon: '🏠', label: 'Real Estate' },
+  { icon: '📱', label: 'Electronics' },
+  { icon: '👕', label: 'Clothing' },
+  { icon: '🛋️', label: 'Furniture' },
+  { icon: '💼', label: 'Jobs' },
+  { icon: '🔧', label: 'Services' },
+  { icon: '🐾', label: 'Animals' },
+]
+
+<ScrollView horizontal showsHorizontalScrollIndicator={false}>
+  {categories.map(cat => (
+    <TouchableOpacity style={{
+      alignItems: 'center',
+      marginRight: 16,
+      width: 64,
+    }}>
+      <View style={{
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: '#E3F2FD',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        <Text style={{ fontSize: 24 }}>{cat.icon}</Text>
+      </View>
+      <Text style={{ fontSize: 11, marginTop: 4, color: '#333', textAlign: 'center' }}>
+        {cat.label}
+      </Text>
+    </TouchableOpacity>
+  ))}
+</ScrollView>
+```
+
+### Live Auction Cards (Horizontal scroll with countdown)
+```jsx
+<AuctionCard
+  image={listing.image}
+  title={listing.title}
+  currentBid={listing.currentBid}
+  currency={listing.currency}
+  timeRemaining={listing.endsAt}  // countdown timer
+  bidCount={listing.bidCount}
+/>
+
+// AuctionCard style:
+<View style={{
+  width: 160,
+  borderRadius: 12,
+  backgroundColor: 'white',
+  marginRight: 12,
+  shadowColor: '#000',
+  shadowOpacity: 0.1,
+  shadowRadius: 8,
+  elevation: 3,
+  overflow: 'hidden',
+}}>
+  <Image source={{ uri: image }} style={{ width: '100%', height: 120 }} />
+  
+  {/* Auction badge */}
+  <View style={{
+    position: 'absolute',
+    top: 8, left: 8,
+    backgroundColor: '#E53935',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  }}>
+    <Text style={{ color: 'white', fontSize: 10, fontWeight: 'bold' }}>AUCTION</Text>
+  </View>
+  
+  {/* Countdown timer */}
+  <View style={{
+    position: 'absolute',
+    top: 8, right: 8,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  }}>
+    <ClockIcon size={10} color="#FFC220" />
+    <Text style={{ color: 'white', fontSize: 10 }}>{countdown}</Text>
+  </View>
+  
+  <View style={{ padding: 10 }}>
+    <Text numberOfLines={2} style={{ fontSize: 12, fontWeight: '500', color: '#1A1A1A' }}>
+      {title}
+    </Text>
+    <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#0071CE', marginTop: 4 }}>
+      {formatPrice(currentBid, currency)}
+    </Text>
+    <Text style={{ fontSize: 11, color: '#888' }}>{bidCount} bids</Text>
+  </View>
+</View>
+```
+
+### Listings Grid (2 columns like eBay)
+```jsx
+<FlatList
+  data={listings}
+  numColumns={2}
+  columnWrapperStyle={{ gap: 8 }}
+  renderItem={({ item }) => <ListingCard listing={item} />}
+/>
+
+// ListingCard:
+<TouchableOpacity style={{
+  flex: 1,
+  backgroundColor: 'white',
+  borderRadius: 12,
+  overflow: 'hidden',
+  shadowColor: '#000',
+  shadowOpacity: 0.08,
+  shadowRadius: 6,
+  elevation: 2,
+  marginBottom: 8,
+}}>
+  <View>
+    <Image
+      source={{ uri: item.image || 'https://via.placeholder.com/200' }}
+      style={{ width: '100%', height: 150 }}
+      resizeMode="cover"
+    />
+    
+    {/* Badge: AUCTION or BUY NOW */}
+    <View style={{
+      position: 'absolute',
+      top: 8, left: 8,
+      backgroundColor: item.type === 'auction' ? '#E53935' : '#0071CE',
+      borderRadius: 4,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+    }}>
+      <Text style={{ color: 'white', fontSize: 9, fontWeight: 'bold' }}>
+        {item.type === 'auction' ? '🔨 AUCTION' : '⚡ BUY NOW'}
+      </Text>
+    </View>
+    
+    {/* Featured badge */}
+    {item.isFeatured && (
+      <View style={{
+        position: 'absolute',
+        top: 8, right: 8,
+        backgroundColor: '#FFC220',
+        borderRadius: 4,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+      }}>
+        <Text style={{ color: '#1A1A1A', fontSize: 9, fontWeight: 'bold' }}>⭐ TOP</Text>
+      </View>
+    )}
+  </View>
+  
+  <View style={{ padding: 8 }}>
+    <Text numberOfLines={2} style={{ fontSize: 12, color: '#1A1A1A', lineHeight: 16 }}>
+      {item.title}
+    </Text>
+    <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#0071CE', marginTop: 4 }}>
+      {formatPrice(item.price, item.currency)}
+    </Text>
+    {item.type === 'auction' && (
+      <Text style={{ fontSize: 10, color: '#E53935' }}>
+        ⏰ {getCountdown(item.endsAt)}
+      </Text>
+    )}
+    <Text style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+      📍 {item.city}, {item.country}
+    </Text>
+  </View>
+</TouchableOpacity>
+```
+
+---
+
+## Screen 2 — Listing Detail (like eBay product page)
+
+```
+┌─────────────────────────────────┐
+│ ←  Item Details        ❤️  📤  │
+├─────────────────────────────────┤
+│                                 │
+│    [Image Gallery Swiper]       │  ← Full width image
+│         ● ○ ○ ○                │  ← Dots indicator
+│                                 │
+├─────────────────────────────────┤
+│ [AUCTION] [FEATURED]            │  ← Colored badges
+│ iPhone 15 Pro Max 256GB...      │  ← Title
+│ 📍 Dubai, UAE                   │
+├─────────────────────────────────┤
+│ ┌───────────────────────────┐   │
+│ │ 🔨 Current Bid:  $1,250   │   │  ← Blue box for auction
+│ │ ⏰ Ends in: 02:34:18      │   │  ← Countdown
+│ │ 👥 47 bids                │   │
+│ └───────────────────────────┘   │
+├─────────────────────────────────┤
+│ Condition: Used - Like New      │
+│ ─────────────────────────────── │
+│ Description                     │
+│ Lorem ipsum...                  │
+├─────────────────────────────────┤
+│ Seller                          │
+│ [Avatar] Ahmed Al-Rashid  ⭐4.8 │
+│          47 sales  Dubai, UAE   │
+│                   [Contact]     │
+└─────────────────────────────────┘
+│ [Place Bid — $1,350]            │  ← Yellow CTA button
+└─────────────────────────────────┘
+```
+
+### CTA Button styles:
+```jsx
+// Auction CTA
+<TouchableOpacity style={{
+  backgroundColor: '#FFC220',
+  margin: 16,
+  padding: 16,
+  borderRadius: 8,
+  alignItems: 'center',
+}}>
+  <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' }}>
+    🔨 Place Bid — {formatPrice(currentBid + 100, currency)}
+  </Text>
+</TouchableOpacity>
+
+// Buy Now CTA
+<TouchableOpacity style={{
+  backgroundColor: '#0071CE',
+  margin: 16,
+  padding: 16,
+  borderRadius: 8,
+  alignItems: 'center',
+}}>
+  <Text style={{ fontSize: 16, fontWeight: 'bold', color: 'white' }}>
+    ⚡ Buy Now — {formatPrice(price, currency)}
+  </Text>
+</TouchableOpacity>
+```
+
+---
+
+## Screen 3 — Bottom Navigation
+
+```jsx
+const tabs = [
+  { icon: '🏠', label: 'Home', screen: 'Home' },
+  { icon: '🔨', label: 'Auctions', screen: 'Auctions' },
+  { icon: '➕', label: 'Sell', screen: 'CreateListing' },  // Big yellow button
+  { icon: '💬', label: 'Messages', screen: 'Chat' },
+  { icon: '👤', label: 'Profile', screen: 'Profile' },
+]
+
+// The middle "Sell" button should be special:
+<TouchableOpacity style={{
+  width: 56,
+  height: 56,
+  borderRadius: 28,
+  backgroundColor: '#FFC220',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginTop: -20,  // Floats above the bar
+  shadowColor: '#FFC220',
+  shadowOpacity: 0.4,
+  shadowRadius: 8,
+  elevation: 8,
+}}>
+  <Text style={{ fontSize: 28, color: '#1A1A1A' }}>+</Text>
+</TouchableOpacity>
+```
+
+---
+
+## Screen 4 — Search Results
+
+```
+┌─────────────────────────────────┐
+│ ← 🔍 iphone 15          Filter │
+├─────────────────────────────────┤
+│ Sort: Best Match ▼  [=] Filters│
+├─────────────────────────────────┤
+│ 1,234 results                   │
+├─────────────────────────────────┤
+│ ┌──────┐ iPhone 15 Pro          │
+│ │[IMG] │ Used - Excellent       │
+│ │      │ $1,200                 │
+│ │[AUC] │ ⏰ 3h 24m left        │
+│ │      │ 📍 Dubai  12 bids     │
+│ └──────┘                        │
+│ ─────────────────────────────── │
+│ ┌──────┐ iPhone 15 128GB        │
+│ │[IMG] │ New - Sealed           │
+│ │      │ $999                   │
+│ │[BUY] │ 📍 Cairo               │
+│ └──────┘                        │
+└─────────────────────────────────┘
+```
+
+```jsx
+// List item style (not grid — list for search results like eBay)
+<TouchableOpacity style={{
+  flexDirection: 'row',
+  backgroundColor: 'white',
+  padding: 12,
+  gap: 12,
+  borderBottomWidth: 1,
+  borderBottomColor: '#F0F0F0',
+}}>
+  <Image source={{ uri: item.image }} style={{ width: 100, height: 100, borderRadius: 8 }} />
+  <View style={{ flex: 1 }}>
+    <Text numberOfLines={2} style={{ fontSize: 14, fontWeight: '500' }}>{item.title}</Text>
+    <Text style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{item.condition}</Text>
+    <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#0071CE', marginTop: 4 }}>
+      {formatPrice(item.price, item.currency)}
+    </Text>
+    {item.type === 'auction' && (
+      <Text style={{ fontSize: 12, color: '#E53935' }}>⏰ {countdown} · {item.bidCount} bids</Text>
+    )}
+    <Text style={{ fontSize: 12, color: '#888', marginTop: 2 }}>📍 {item.city}</Text>
+  </View>
+  <TouchableOpacity>
+    <HeartIcon color="#888" />
+  </TouchableOpacity>
+</TouchableOpacity>
+```
+
+---
+
+## Global Styles to Apply Everywhere
+
+```javascript
+// Typography
+const typography = {
+  h1: { fontSize: 24, fontWeight: 'bold', color: '#1A1A1A' },
+  h2: { fontSize: 18, fontWeight: 'bold', color: '#1A1A1A' },
+  body: { fontSize: 14, color: '#333' },
+  caption: { fontSize: 12, color: '#888' },
+  price: { fontSize: 16, fontWeight: 'bold', color: '#0071CE' },
+}
+
+// Shadows
+const shadow = {
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.08,
+  shadowRadius: 8,
+  elevation: 3,
+}
+
+// Border radius
+const radius = {
+  small: 4,
+  medium: 8,
+  large: 12,
+  pill: 24,
+}
+```
+
+---
+
+## Important Rules
+
+1. **Colors:** ONLY use #0071CE (blue) and #FFC220 (yellow) as primary colors
+2. **Images:** If no real image, use `https://picsum.photos/400/300?random={id}` as placeholder
+3. **Badges:** Every listing card MUST show either 🔨 AUCTION (red) or ⚡ BUY NOW (blue) badge
+4. **Countdown:** Every auction card MUST show a live countdown timer
+5. **Grid:** Home listings = 2 columns. Search results = list view (like eBay)
+6. **Search bar:** Must be in the blue header, prominent and tappable
+7. **Sell button:** Middle tab must be a floating yellow circle like eBay's app
+8. **DO NOT** change any API calls, data fetching, or business logic
+9. **DO NOT** change navigation structure — only the visual design
+10. After all changes, test on iOS simulator and confirm it renders correctly
+
+---
+
+## Screens to Redesign (in order)
+
+1. ✅ HomeScreen — highest priority
+2. ✅ ListingDetailScreen
+3. ✅ SearchResultsScreen
+4. ✅ AuctionsScreen
+5. ✅ BottomTabNavigator
+6. ✅ ListingCard component
+7. ✅ AuctionCard component
+8. ✅ ProfileScreen (keep existing, just update colors)

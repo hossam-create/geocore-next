@@ -1,0 +1,47 @@
+# Kustomize — Production overlay
+  # Apply: kubectl apply -k infra/k8s/
+  # Diff:  kubectl diff -k infra/k8s/
+
+  apiVersion: kustomize.config.k8s.io/v1beta1
+  kind: Kustomization
+
+  namespace: geocore
+
+  resources:
+    # Core
+    - namespace.yaml
+    - configmap.yaml
+    - secrets.yaml
+
+    # Database layer
+    - postgres/pvc.yaml
+    - postgres/deployment.yaml
+    - postgres/service.yaml
+
+    # Cache layer
+    - redis/deployment.yaml
+    - redis/service.yaml
+
+    # Application layer
+    - api/deployment.yaml
+    - api/service.yaml
+    - api/hpa.yaml
+    - frontend/deployment.yaml
+    - admin/deployment.yaml
+
+    # Networking
+    - ingress.yaml
+
+  images:
+    - name: ghcr.io/hossam-create/geocore-api
+      newTag: latest
+    - name: ghcr.io/hossam-create/geocore-frontend
+      newTag: latest
+    - name: ghcr.io/hossam-create/geocore-admin
+      newTag: latest
+
+  commonLabels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/part-of: geocore
+    environment: production
+  
