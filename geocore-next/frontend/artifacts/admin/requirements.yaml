@@ -1,0 +1,10 @@
+packages:
+  "framer-motion": "For page transitions and animated UI interactions"
+images:
+  - path: "artifacts/admin/public/images/auth-bg.png"
+    description: "Abstract geometric dark navy and blue gradient background for admin login page"
+    aspect_ratio: "16:9"
+notes:
+  - "Using wouter for routing"
+  - "Axios for API client with Bearer token interceptor"
+  - "Mock data fallbacks implemented for all queries to ensure robust UI when API is unavailable"

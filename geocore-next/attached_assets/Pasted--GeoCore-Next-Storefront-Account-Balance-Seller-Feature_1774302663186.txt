@@ -1,0 +1,605 @@
+# GeoCore Next — Storefront + Account Balance + Seller Features
+> ابعت لـ Cursor أو Replit Agent بعد ما يخلص TASK-101 → TASK-107
+
+---
+
+## Context
+
+**Repo:** https://github.com/hossam-create/geocore-next
+
+Read these first:
+```
+CLAUDE.md
+backend/internal/users/model.go
+backend/internal/listings/model.go
+backend/pkg/response/response.go
+```
+
+---
+
+## TASK-111: Storefront System
+
+**What is it:**
+Every seller gets their own store page with a unique URL.
+Like: `geocore.com/stores/ahmed-phones`
+
+**New file:** `backend/internal/storefronts/model.go`
+```go
+package storefronts
+
+import (
+    "time"
+    "github.com/google/uuid"
+    "gorm.io/gorm"
+)
+
+type Storefront struct {
+    ID          uuid.UUID      `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+    UserID      uuid.UUID      `gorm:"type:uuid;not null;uniqueIndex" json:"user_id"`
+    Slug        string         `gorm:"uniqueIndex;not null;size:100" json:"slug"`
+    Name        string         `gorm:"not null" json:"name"`
+    Description string         `gorm:"type:text" json:"description"`
+    LogoURL     string         `json:"logo_url,omitempty"`
+    BannerURL   string         `json:"banner_url,omitempty"`
+    WelcomeMsg  string         `gorm:"type:text" json:"welcome_msg"`
+    IsActive    bool           `gorm:"default:true" json:"is_active"`
+    Views       int            `gorm:"default:0" json:"views"`
+    CreatedAt   time.Time      `json:"created_at"`
+    UpdatedAt   time.Time      `json:"updated_at"`
+    DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}
+```
+
+**New file:** `backend/internal/storefronts/handler.go`
+```go
+package storefronts
+
+import (
+    "fmt"
+    "regexp"
+    "strings"
+
+    "github.com/geocore-next/backend/pkg/middleware"
+    "github.com/geocore-next/backend/pkg/response"
+    "github.com/gin-gonic/gin"
+    "github.com/google/uuid"
+    "github.com/redis/go-redis/v9"
+    "gorm.io/gorm"
+)
+
+type Handler struct {
+    db  *gorm.DB
+    rdb *redis.Client
+}
+
+func NewHandler(db *gorm.DB, rdb *redis.Client) *Handler {
+    return &Handler{db, rdb}
+}
+
+// GET /api/v1/stores/:slug — public, view storefront
+func (h *Handler) GetBySlug(c *gin.Context) {
+    slug := c.Param("slug")
+    var store Storefront
+    if err := h.db.First(&store, "slug = ? AND is_active = true", slug).Error; err != nil {
+        response.NotFound(c, "Storefront")
+        return
+    }
+    // Increment views async
+    go h.db.Model(&store).UpdateColumn("views", gorm.Expr("views + 1"))
+
+    // Get seller's active listings
+    var listings []map[string]interface{}
+    h.db.Raw(`
+        SELECT id, title, price, currency, type, status, city, country,
+               is_featured, created_at
+        FROM listings
+        WHERE user_id = ? AND status = 'active' AND deleted_at IS NULL
+        ORDER BY is_featured DESC, created_at DESC
+        LIMIT 20
+    `, store.UserID).Scan(&listings)
+
+    response.OK(c, gin.H{
+        "storefront": store,
+        "listings":   listings,
+    })
+}
+
+// GET /api/v1/stores — list all active storefronts
+func (h *Handler) List(c *gin.Context) {
+    var stores []Storefront
+    h.db.Where("is_active = true").
+        Order("views DESC").
+        Limit(50).
+        Find(&stores)
+    response.OK(c, stores)
+}
+
+// POST /api/v1/stores — create my storefront (auth required)
+func (h *Handler) Create(c *gin.Context) {
+    userID, _ := uuid.Parse(c.MustGet("user_id").(string))
+
+    // Check if user already has a storefront
+    var existing Storefront
+    if h.db.Where("user_id = ?", userID).First(&existing).Error == nil {
+        response.BadRequest(c, "You already have a storefront")
+        return
+    }
+
+    var req struct {
+        Name       string `json:"name" binding:"required,min=3,max=100"`
+        Description string `json:"description"`
+        WelcomeMsg string `json:"welcome_msg"`
+        Slug       string `json:"slug"` // optional, auto-generated if empty
+    }
+    if err := c.ShouldBindJSON(&req); err != nil {
+        response.BadRequest(c, err.Error())
+        return
+    }
+
+    slug := req.Slug
+    if slug == "" {
+        slug = generateSlug(req.Name)
+    }
+
+    // Ensure slug is unique
+    slug = ensureUniqueSlug(h.db, slug, uuid.Nil)
+
+    store := Storefront{
+        ID:          uuid.New(),
+        UserID:      userID,
+        Slug:        slug,
+        Name:        req.Name,
+        Description: req.Description,
+        WelcomeMsg:  req.WelcomeMsg,
+    }
+
+    if err := h.db.Create(&store).Error; err != nil {
+        response.InternalError(c, err)
+        return
+    }
+    response.Created(c, store)
+}
+
+// PUT /api/v1/stores/me — update my storefront
+func (h *Handler) UpdateMine(c *gin.Context) {
+    userID := c.MustGet("user_id").(string)
+
+    var store Storefront
+    if err := h.db.Where("user_id = ?", userID).First(&store).Error; err != nil {
+        response.NotFound(c, "Storefront")
+        return
+    }
+
+    var req struct {
+        Name        string `json:"name"`
+        Description string `json:"description"`
+        WelcomeMsg  string `json:"welcome_msg"`
+        LogoURL     string `json:"logo_url"`
+        BannerURL   string `json:"banner_url"`
+    }
+    if err := c.ShouldBindJSON(&req); err != nil {
+        response.BadRequest(c, err.Error())
+        return
+    }
+
+    updates := map[string]interface{}{}
+    if req.Name != "" { updates["name"] = req.Name }
+    if req.Description != "" { updates["description"] = req.Description }
+    if req.WelcomeMsg != "" { updates["welcome_msg"] = req.WelcomeMsg }
+    if req.LogoURL != "" { updates["logo_url"] = req.LogoURL }
+    if req.BannerURL != "" { updates["banner_url"] = req.BannerURL }
+
+    h.db.Model(&store).Updates(updates)
+    response.OK(c, store)
+}
+
+// GET /api/v1/stores/me — get my storefront
+func (h *Handler) GetMine(c *gin.Context) {
+    userID := c.MustGet("user_id").(string)
+    var store Storefront
+    if err := h.db.Where("user_id = ?", userID).First(&store).Error; err != nil {
+        response.NotFound(c, "Storefront")
+        return
+    }
+    response.OK(c, store)
+}
+
+func generateSlug(name string) string {
+    slug := strings.ToLower(name)
+    re := regexp.MustCompile(`[^a-z0-9]+`)
+    slug = re.ReplaceAllString(slug, "-")
+    return strings.Trim(slug, "-")
+}
+
+func ensureUniqueSlug(db *gorm.DB, slug string, excludeID uuid.UUID) string {
+    original := slug
+    counter := 1
+    for {
+        var count int64
+        q := db.Model(&Storefront{}).Where("slug = ?", slug)
+        if excludeID != uuid.Nil {
+            q = q.Where("id != ?", excludeID)
+        }
+        q.Count(&count)
+        if count == 0 {
+            return slug
+        }
+        slug = fmt.Sprintf("%s-%d", original, counter)
+        counter++
+    }
+}
+```
+
+**New file:** `backend/internal/storefronts/routes.go`
+```go
+package storefronts
+
+import (
+    "github.com/geocore-next/backend/pkg/middleware"
+    "github.com/gin-gonic/gin"
+    "github.com/redis/go-redis/v9"
+    "gorm.io/gorm"
+)
+
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
+    h := NewHandler(db, rdb)
+
+    stores := r.Group("/stores")
+    {
+        stores.GET("", h.List)
+        stores.GET("/:slug", h.GetBySlug)
+
+        auth := stores.Group("")
+        auth.Use(middleware.Auth())
+        auth.POST("", h.Create)
+        auth.GET("/me", h.GetMine)
+        auth.PUT("/me", h.UpdateMine)
+    }
+}
+```
+
+**Update main.go:**
+```go
+import "github.com/geocore-next/backend/internal/storefronts"
+// In RegisterRoutes section:
+storefronts.RegisterRoutes(v1, db, rdb)
+```
+
+**Update database.go AutoMigrate:**
+```go
+&storefronts.Storefront{},
+```
+
+**Commit:** `git commit -m "feat(storefronts): seller storefront with custom URL + listings"`
+
+---
+
+## TASK-112: Account Balance
+
+**What is it:**
+Every user has an internal wallet balance.
+They can use it to pay listing fees, receive refunds, etc.
+
+**Update** `backend/internal/users/model.go`:
+```go
+// Add to User struct:
+Balance  float64 `gorm:"default:0" json:"balance"`
+```
+
+**New model** `backend/internal/wallet/model.go`:
+```go
+package wallet
+
+import (
+    "time"
+    "github.com/google/uuid"
+)
+
+type Transaction struct {
+    ID          uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
+    UserID      uuid.UUID `gorm:"type:uuid;not null;index" json:"user_id"`
+    Amount      float64   `gorm:"not null" json:"amount"`       // positive = credit, negative = debit
+    Type        string    `gorm:"not null;index" json:"type"`
+    // Types: deposit | withdrawal | listing_fee | featured_fee |
+    //        auction_win | refund | final_value_fee | admin_credit
+    Reference   string    `json:"reference,omitempty"`   // listing ID, payment ID, etc.
+    Note        string    `json:"note,omitempty"`
+    BalanceAfter float64  `json:"balance_after"`         // snapshot of balance after transaction
+    Currency    string    `gorm:"default:USD" json:"currency"`
+    CreatedAt   time.Time `gorm:"index" json:"created_at"`
+}
+```
+
+**New file:** `backend/internal/wallet/handler.go`
+```go
+package wallet
+
+import (
+    "github.com/geocore-next/backend/pkg/response"
+    "github.com/gin-gonic/gin"
+    "github.com/google/uuid"
+    "github.com/redis/go-redis/v9"
+    "gorm.io/gorm"
+)
+
+type Handler struct {
+    db  *gorm.DB
+    rdb *redis.Client
+}
+
+func NewHandler(db *gorm.DB, rdb *redis.Client) *Handler {
+    return &Handler{db, rdb}
+}
+
+// GET /api/v1/wallet/balance — my balance
+func (h *Handler) GetBalance(c *gin.Context) {
+    userID := c.MustGet("user_id").(string)
+    var result struct {
+        Balance  float64 `json:"balance"`
+        Currency string  `json:"currency"`
+    }
+    h.db.Raw("SELECT balance, currency FROM users WHERE id = ?", userID).Scan(&result)
+    response.OK(c, result)
+}
+
+// GET /api/v1/wallet/transactions — my transaction history
+func (h *Handler) GetTransactions(c *gin.Context) {
+    userID := c.MustGet("user_id").(string)
+    var txns []Transaction
+    h.db.Where("user_id = ?", userID).
+        Order("created_at DESC").
+        Limit(50).
+        Find(&txns)
+    response.OK(c, txns)
+}
+
+// Credit is internal — called by other handlers (listing fee, etc.)
+func Credit(db *gorm.DB, userID uuid.UUID, amount float64, txType, reference, note, currency string) error {
+    return db.Transaction(func(tx *gorm.DB) error {
+        // Update balance
+        if err := tx.Exec(
+            "UPDATE users SET balance = balance + ? WHERE id = ?",
+            amount, userID,
+        ).Error; err != nil {
+            return err
+        }
+        // Get new balance
+        var newBalance float64
+        tx.Raw("SELECT balance FROM users WHERE id = ?", userID).Scan(&newBalance)
+        // Record transaction
+        txn := Transaction{
+            ID:           uuid.New(),
+            UserID:       userID,
+            Amount:       amount,
+            Type:         txType,
+            Reference:    reference,
+            Note:         note,
+            BalanceAfter: newBalance,
+            Currency:     currency,
+        }
+        return tx.Create(&txn).Error
+    })
+}
+
+// Debit is internal — returns error if insufficient balance
+func Debit(db *gorm.DB, userID uuid.UUID, amount float64, txType, reference, note, currency string) error {
+    return db.Transaction(func(tx *gorm.DB) error {
+        // Check balance
+        var currentBalance float64
+        tx.Raw("SELECT balance FROM users WHERE id = ?", userID).Scan(&currentBalance)
+        if currentBalance < amount {
+            return fmt.Errorf("insufficient balance: have %.2f, need %.2f", currentBalance, amount)
+        }
+        // Deduct
+        if err := tx.Exec(
+            "UPDATE users SET balance = balance - ? WHERE id = ?",
+            amount, userID,
+        ).Error; err != nil {
+            return err
+        }
+        var newBalance float64
+        tx.Raw("SELECT balance FROM users WHERE id = ?", userID).Scan(&newBalance)
+        txn := Transaction{
+            ID:           uuid.New(),
+            UserID:       userID,
+            Amount:       -amount, // negative for debit
+            Type:         txType,
+            Reference:    reference,
+            Note:         note,
+            BalanceAfter: newBalance,
+            Currency:     currency,
+        }
+        return tx.Create(&txn).Error
+    })
+}
+```
+
+**New file:** `backend/internal/wallet/routes.go`
+```go
+package wallet
+
+import (
+    "github.com/geocore-next/backend/pkg/middleware"
+    "github.com/gin-gonic/gin"
+    "github.com/redis/go-redis/v9"
+    "gorm.io/gorm"
+)
+
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
+    h := NewHandler(db, rdb)
+    w := r.Group("/wallet", middleware.Auth())
+    {
+        w.GET("/balance", h.GetBalance)
+        w.GET("/transactions", h.GetTransactions)
+    }
+}
+```
+
+**Update main.go + database.go** to include wallet package.
+
+**Commit:** `git commit -m "feat(wallet): account balance + transaction history"`
+
+---
+
+## TASK-113: Attention Getter
+
+**What is it:**
+Seller pays extra to show a banner image next to their listing in search results.
+
+**Update** `backend/internal/listings/model.go`:
+```go
+// Add to Listing struct:
+AttentionGetterURL *string    `json:"attention_getter_url,omitempty"`
+AttentionGetterExp *time.Time `json:"attention_getter_expires,omitempty"`
+```
+
+**Update** `backend/internal/payments/handler.go`:
+```go
+// New endpoint: POST /api/v1/listings/:id/attention-getter
+// - Accepts payment via Stripe
+// - On success: sets attention_getter_url + expiry
+// - Duration: 7 days or 30 days
+// - Shows in search results alongside listing
+```
+
+**Commit:** `git commit -m "feat(listings): attention getter feature with expiry"`
+
+---
+
+## TASK-114: Listing Export (CSV)
+
+**New endpoint:**
+`GET /api/v1/users/me/listings/export?format=csv`
+`GET /api/v1/admin/listings/export?format=csv&status=active`
+
+```go
+// In listings/handler.go
+func (h *Handler) ExportMyListings(c *gin.Context) {
+    userID := c.MustGet("user_id").(string)
+    format := c.DefaultQuery("format", "csv")
+
+    var listings []Listing
+    h.db.Where("user_id = ? AND deleted_at IS NULL", userID).
+        Order("created_at DESC").
+        Find(&listings)
+
+    if format == "csv" {
+        c.Header("Content-Type", "text/csv")
+        c.Header("Content-Disposition", "attachment; filename=my-listings.csv")
+
+        w := csv.NewWriter(c.Writer)
+        // Write header
+        w.Write([]string{"ID","Title","Price","Currency","Type","Status","Country","City","Created"})
+        // Write rows
+        for _, l := range listings {
+            price := ""
+            if l.Price != nil { price = fmt.Sprintf("%.2f", *l.Price) }
+            w.Write([]string{
+                l.ID.String(), l.Title, price, l.Currency,
+                l.Type, l.Status, l.Country, l.City,
+                l.CreatedAt.Format("2006-01-02"),
+            })
+        }
+        w.Flush()
+        return
+    }
+    response.BadRequest(c, "Unsupported format. Use: csv")
+}
+```
+
+**Commit:** `git commit -m "feat(listings): CSV export for my listings"`
+
+---
+
+## TASK-115: Bulk Import (CSV)
+
+**New endpoint:**
+`POST /api/v1/admin/listings/bulk-import`
+`Content-Type: multipart/form-data`
+`file: listings.csv`
+
+**CSV format:**
+```
+title,description,price,currency,category_slug,country,city,condition,type
+"iPhone 15 Pro","Like new...",1200,USD,electronics,EG,Cairo,used,sell
+"Toyota Camry 2020","Clean car...",25000,USD,vehicles,AE,Dubai,used,sell
+```
+
+```go
+func (h *Handler) BulkImport(c *gin.Context) {
+    // Only admin
+    file, _, err := c.Request.FormFile("file")
+    if err != nil {
+        response.BadRequest(c, "file required")
+        return
+    }
+    defer file.Close()
+
+    reader := csv.NewReader(file)
+    records, err := reader.ReadAll()
+    if err != nil {
+        response.BadRequest(c, "invalid CSV format")
+        return
+    }
+
+    // Skip header row
+    var created, failed int
+    for _, record := range records[1:] {
+        // Parse + validate + create listing
+        // Skip invalid rows, count successes/failures
+    }
+    response.OK(c, gin.H{
+        "created": created,
+        "failed":  failed,
+        "total":   len(records) - 1,
+    })
+}
+```
+
+**Commit:** `git commit -m "feat(admin): bulk listing import from CSV"`
+
+---
+
+## After All Tasks
+
+```bash
+cd backend
+go build ./...   # must pass with 0 errors
+go vet ./...     # must pass
+
+git push origin main
+```
+
+---
+
+## Final Report
+
+```
+═══════════════════════════════════════
+GEOCORE NEXT — P1 FEATURES REPORT
+═══════════════════════════════════════
+
+TASK-111 Storefront:          ✅ | ❌
+TASK-112 Account Balance:     ✅ | ❌
+TASK-113 Attention Getter:    ✅ | ❌
+TASK-114 Listing Export CSV:  ✅ | ❌
+TASK-115 Bulk Import CSV:     ✅ | ❌
+
+go build: PASS / FAIL
+Tests:    PASS / FAIL
+
+New endpoints added:
+- GET  /api/v1/stores
+- GET  /api/v1/stores/:slug
+- POST /api/v1/stores
+- GET  /api/v1/stores/me
+- PUT  /api/v1/stores/me
+- GET  /api/v1/wallet/balance
+- GET  /api/v1/wallet/transactions
+- GET  /api/v1/users/me/listings/export
+- POST /api/v1/admin/listings/bulk-import
+
+GitHub: pushed ✅
+Next: TASK-116 (Final Value Fee), TASK-117 (Multi-Admin)
+═══════════════════════════════════════
+```

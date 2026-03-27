@@ -1,0 +1,80 @@
+name: CI — Test & Build
+
+  on:
+    push:
+      branches: [main]
+    pull_request:
+      branches: [main]
+
+  jobs:
+    test:
+      name: Go Unit + Integration Tests
+      runs-on: ubuntu-latest
+
+      services:
+        postgres:
+          image: postgres:16-alpine
+          env:
+            POSTGRES_USER: geocore
+            POSTGRES_PASSWORD: test_secret
+            POSTGRES_DB: geocore_test
+          options: >-
+            --health-cmd pg_isready
+            --health-interval 10s
+            --health-timeout 5s
+            --health-retries 5
+          ports:
+            - 5432:5432
+
+        redis:
+          image: redis:7-alpine
+          options: >-
+            --health-cmd "redis-cli ping"
+            --health-interval 10s
+            --health-timeout 5s
+            --health-retries 5
+          ports:
+            - 6379:6379
+
+      env:
+        DB_HOST: localhost
+        DB_USER: geocore
+        DB_PASSWORD: test_secret
+        DB_NAME: geocore_test
+        DB_PORT: 5432
+        DB_SSLMODE: disable
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+        JWT_SECRET: test-jwt-secret-at-least-64-characters-long-for-test-purposes-only
+        APP_ENV: test
+
+      steps:
+        - uses: actions/checkout@v4
+
+        - name: Set up Go
+          uses: actions/setup-go@v5
+          with:
+            go-version: "1.23"
+            cache: true
+
+        - name: Download modules
+          working-directory: backend
+          run: go mod download
+
+        - name: Vet
+          working-directory: backend
+          run: go vet ./...
+
+        - name: Run unit tests with coverage
+          working-directory: backend
+          run: |
+            go test ./... -coverprofile=coverage.out -timeout 120s
+            go tool cover -func=coverage.out | tail -1
+
+        - name: Upload coverage to Codecov
+          uses: codecov/codecov-action@v4
+          with:
+            files: backend/coverage.out
+            flags: backend
+            fail_ci_if_error: false
+  

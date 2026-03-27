@@ -1,0 +1,626 @@
+# GeoCore Next — Public APIs Integration Prompt
+> انسخ وابعت لـ Claude Code في Cursor
+
+---
+
+## Your Mission
+
+Analyze the geocore-next codebase, identify exactly where free public APIs can replace missing or hardcoded functionality, then integrate them.
+
+**Working repo:** https://github.com/hossam-create/geocore-next
+**APIs reference:** https://raw.githubusercontent.com/public-apis/public-apis/master/README.md
+
+---
+
+## Step 1 — Read the Codebase First
+
+Read these files to understand what's already built and what's missing:
+
+```
+backend/cmd/api/main.go
+backend/internal/listings/model.go
+backend/internal/listings/handler.go
+backend/internal/users/model.go
+backend/internal/users/handler.go
+backend/pkg/database/database.go
+backend/.env.example
+docker-compose.yml
+```
+
+While reading, look for these specific gaps:
+- Hardcoded currencies (e.g. `"USD"` everywhere)
+- No IP-based country detection
+- No email validation on register
+- No address → lat/lng conversion (geocoding)
+- No phone number validation
+- Image upload going to Cloudinary (needs a free alternative for dev)
+
+---
+
+## Step 2 — APIs to Integrate
+
+Integrate ALL of the following. Each one is free with no API key required unless noted.
+
+---
+
+### API 1 — Currency Exchange (Frankfurter)
+**URL:** `https://api.frankfurter.app`
+**No API key needed**
+**Docs:** https://www.frankfurter.app/docs
+
+**Where to use:**
+- New file: `backend/pkg/currency/currency.go`
+- Called from: `backend/internal/listings/handler.go` when creating/updating a listing
+
+**What to build:**
+
+```go
+// backend/pkg/currency/currency.go
+package currency
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+)
+
+var httpClient = &http.Client{Timeout: 5 * time.Second}
+
+// SupportedCurrencies returns list of all supported currency codes
+func SupportedCurrencies() ([]string, error) {
+    resp, err := httpClient.Get("https://api.frankfurter.app/currencies")
+    if err != nil {
+        return nil, fmt.Errorf("currency.SupportedCurrencies: %w", err)
+    }
+    defer resp.Body.Close()
+    var result map[string]string
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, fmt.Errorf("currency.SupportedCurrencies decode: %w", err)
+    }
+    codes := make([]string, 0, len(result))
+    for code := range result {
+        codes = append(codes, code)
+    }
+    return codes, nil
+}
+
+// Convert converts an amount from one currency to another
+// Returns converted amount
+func Convert(amount float64, from, to string) (float64, error) {
+    if from == to {
+        return amount, nil
+    }
+    url := fmt.Sprintf("https://api.frankfurter.app/latest?amount=%.2f&from=%s&to=%s", amount, from, to)
+    resp, err := httpClient.Get(url)
+    if err != nil {
+        return 0, fmt.Errorf("currency.Convert: %w", err)
+    }
+    defer resp.Body.Close()
+    var result struct {
+        Rates map[string]float64 `json:"rates"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return 0, fmt.Errorf("currency.Convert decode: %w", err)
+    }
+    converted, ok := result.Rates[to]
+    if !ok {
+        return 0, fmt.Errorf("currency.Convert: currency %s not found", to)
+    }
+    return converted, nil
+}
+```
+
+**Add new endpoint:**
+```
+GET /api/v1/currencies
+```
+Returns list of supported currencies — used by frontend dropdowns.
+
+```go
+// In listings/handler.go or a new currencies handler
+func (h *Handler) GetCurrencies(c *gin.Context) {
+    codes, err := currency.SupportedCurrencies()
+    if err != nil {
+        response.InternalError(c, err)
+        return
+    }
+    response.OK(c, codes)
+}
+```
+
+---
+
+### API 2 — IP Geolocation (ip-api.com)
+**URL:** `http://ip-api.com/json/{ip}`
+**No API key needed** (free for non-commercial, 45 req/min)
+**Docs:** https://ip-api.com/docs
+
+**Where to use:**
+- New file: `backend/pkg/geo/ipgeo.go`
+- Called from: `backend/internal/users/handler.go` on first login/register
+- Auto-fill user's country and city
+
+**What to build:**
+
+```go
+// backend/pkg/geo/ipgeo.go
+package geo
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+)
+
+var httpClient = &http.Client{Timeout: 5 * time.Second}
+
+type IPInfo struct {
+    Country     string  `json:"country"`
+    CountryCode string  `json:"countryCode"`
+    City        string  `json:"city"`
+    Lat         float64 `json:"lat"`
+    Lon         float64 `json:"lon"`
+    Currency    string  `json:"currency"` // not in ip-api, but we can infer
+    Timezone    string  `json:"timezone"`
+}
+
+func LookupIP(ip string) (*IPInfo, error) {
+    // Skip for localhost
+    if ip == "127.0.0.1" || ip == "::1" {
+        return &IPInfo{Country: "Unknown", CountryCode: "US", City: "Unknown"}, nil
+    }
+    url := fmt.Sprintf("http://ip-api.com/json/%s?fields=country,countryCode,city,lat,lon,timezone", ip)
+    resp, err := httpClient.Get(url)
+    if err != nil {
+        return nil, fmt.Errorf("geo.LookupIP: %w", err)
+    }
+    defer resp.Body.Close()
+    var info IPInfo
+    if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+        return nil, fmt.Errorf("geo.LookupIP decode: %w", err)
+    }
+    return &info, nil
+}
+```
+
+**Add new endpoint:**
+```
+GET /api/v1/detect-location
+```
+Frontend calls this on page load to pre-fill country/city in forms.
+
+```go
+func (h *Handler) DetectLocation(c *gin.Context) {
+    ip := c.ClientIP()
+    info, err := geo.LookupIP(ip)
+    if err != nil {
+        response.OK(c, gin.H{"country": "", "city": ""})
+        return
+    }
+    response.OK(c, info)
+}
+```
+
+---
+
+### API 3 — Geocoding (Nominatim / OpenStreetMap)
+**URL:** `https://nominatim.openstreetmap.org`
+**No API key needed** (add User-Agent header as required)
+**Docs:** https://nominatim.org/release-docs/develop/api/Search/
+
+**Where to use:**
+- Add to `backend/pkg/geo/geocode.go`
+- Called from: `backend/internal/listings/handler.go` when creating a listing with address but no lat/lng
+
+**What to build:**
+
+```go
+// backend/pkg/geo/geocode.go
+package geo
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "net/url"
+    "time"
+)
+
+type GeoResult struct {
+    Lat string `json:"lat"`
+    Lon string `json:"lon"`
+}
+
+func GeocodeAddress(address, city, country string) (*GeoResult, error) {
+    query := fmt.Sprintf("%s, %s, %s", address, city, country)
+    apiURL := fmt.Sprintf(
+        "https://nominatim.openstreetmap.org/search?q=%s&format=json&limit=1",
+        url.QueryEscape(query),
+    )
+    req, _ := http.NewRequest("GET", apiURL, nil)
+    // Nominatim requires a User-Agent
+    req.Header.Set("User-Agent", "GeoCore-Next/1.0 (geocore@example.com)")
+
+    resp, err := httpClient.Do(req)
+    if err != nil {
+        return nil, fmt.Errorf("geo.GeocodeAddress: %w", err)
+    }
+    defer resp.Body.Close()
+    var results []GeoResult
+    if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+        return nil, fmt.Errorf("geo.GeocodeAddress decode: %w", err)
+    }
+    if len(results) == 0 {
+        return nil, fmt.Errorf("geo.GeocodeAddress: no results for %q", query)
+    }
+    return &results[0], nil
+}
+```
+
+**Update listings/handler.go Create():**
+```go
+// After binding req, if lat/lng not provided but address is:
+if req.Address != "" && req.Latitude == nil && req.Longitude == nil {
+    if result, err := geo.GeocodeAddress(req.Address, req.City, req.Country); err == nil {
+        lat, _ := strconv.ParseFloat(result.Lat, 64)
+        lon, _ := strconv.ParseFloat(result.Lon, 64)
+        listing.Latitude = &lat
+        listing.Longitude = &lon
+    }
+    // Don't fail if geocoding fails — just proceed without coordinates
+}
+```
+
+---
+
+### API 4 — Email Validation (EVA)
+**URL:** `https://eva.pingutil.com/email?email={email}`
+**No API key needed**
+**Docs:** https://eva.pingutil.com
+
+**Where to use:**
+- New file: `backend/pkg/validation/email.go`
+- Called from: `backend/internal/auth/handler.go` in Register()
+
+**What to build:**
+
+```go
+// backend/pkg/validation/email.go
+package validation
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+)
+
+var httpClient = &http.Client{Timeout: 4 * time.Second}
+
+type EmailResult struct {
+    Valid       bool   `json:"valid"`
+    Disposable bool   `json:"disposable"`
+    Domain      string `json:"domain"`
+}
+
+// ValidateEmail checks if email is real and not disposable
+// Returns (isValid, isDisposable, error)
+func ValidateEmail(email string) (bool, bool, error) {
+    url := fmt.Sprintf("https://eva.pingutil.com/email?email=%s", email)
+    resp, err := httpClient.Get(url)
+    if err != nil {
+        // Don't block registration if API is down
+        return true, false, nil
+    }
+    defer resp.Body.Close()
+    var result struct {
+        Data EmailResult `json:"data"`
+    }
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return true, false, nil
+    }
+    return result.Data.Valid, result.Data.Disposable, nil
+}
+```
+
+**Update auth/handler.go Register():**
+```go
+// After checking email uniqueness:
+if valid, disposable, _ := validation.ValidateEmail(req.Email); !valid {
+    response.BadRequest(c, "Invalid email address")
+    return
+}
+if disposable {
+    response.BadRequest(c, "Temporary email addresses are not allowed")
+    return
+}
+```
+
+---
+
+### API 5 — Phone Validation (Numverify via apilayer — free tier)
+**URL:** `http://apilayer.net/api/validate?access_key=FREE_KEY&number={phone}`
+**Free tier:** 250 requests/month
+**Alternative (no key):** Use regex validation as fallback
+
+**Where to use:**
+- Add to `backend/pkg/validation/phone.go`
+- Called from: `backend/internal/users/handler.go` UpdateMe()
+
+**What to build:**
+
+```go
+// backend/pkg/validation/phone.go
+package validation
+
+import "regexp"
+
+// ValidatePhoneFormat does basic E.164 format check
+// E.164: +[country code][number], e.g. +201234567890
+func ValidatePhoneFormat(phone string) bool {
+    if phone == "" {
+        return true // optional field
+    }
+    re := regexp.MustCompile(`^\+[1-9]\d{7,14}$`)
+    return re.MatchString(phone)
+}
+```
+
+**Update users/handler.go UpdateMe():**
+```go
+if req.Phone != "" && !validation.ValidatePhoneFormat(req.Phone) {
+    response.BadRequest(c, "Phone must be in E.164 format, e.g. +201234567890")
+    return
+}
+```
+
+---
+
+### API 6 — Public Holidays (Nager.Date)
+**URL:** `https://date.nager.at/api/v3/PublicHolidays/{year}/{countryCode}`
+**No API key needed**
+**Docs:** https://date.nager.at/swagger/index.html
+
+**Where to use:**
+- New file: `backend/pkg/calendar/holidays.go`
+- Used by: Auction scheduler — don't end auctions on public holidays (optional feature)
+- Also useful for: showing "X listings expire during holiday season" warning
+
+**What to build:**
+
+```go
+// backend/pkg/calendar/holidays.go
+package calendar
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "time"
+)
+
+var httpClient = &http.Client{Timeout: 5 * time.Second}
+
+type Holiday struct {
+    Date        string `json:"date"`
+    LocalName   string `json:"localName"`
+    Name        string `json:"name"`
+    CountryCode string `json:"countryCode"`
+}
+
+func GetHolidays(year int, countryCode string) ([]Holiday, error) {
+    url := fmt.Sprintf("https://date.nager.at/api/v3/PublicHolidays/%d/%s", year, countryCode)
+    resp, err := httpClient.Get(url)
+    if err != nil {
+        return nil, fmt.Errorf("calendar.GetHolidays: %w", err)
+    }
+    defer resp.Body.Close()
+    var holidays []Holiday
+    if err := json.NewDecoder(resp.Body).Decode(&holidays); err != nil {
+        return nil, fmt.Errorf("calendar.GetHolidays decode: %w", err)
+    }
+    return holidays, nil
+}
+
+func IsHoliday(date time.Time, countryCode string) (bool, error) {
+    holidays, err := GetHolidays(date.Year(), countryCode)
+    if err != nil {
+        return false, err
+    }
+    dateStr := date.Format("2006-01-02")
+    for _, h := range holidays {
+        if h.Date == dateStr {
+            return true, nil
+        }
+    }
+    return false, nil
+}
+```
+
+---
+
+## Step 3 — Update These Files
+
+### backend/.env.example
+Add:
+```env
+# Public APIs (all free, no key needed)
+IP_GEO_URL=http://ip-api.com/json
+NOMINATIM_URL=https://nominatim.openstreetmap.org
+FRANKFURTER_URL=https://api.frankfurter.app
+EVA_EMAIL_URL=https://eva.pingutil.com/email
+NAGER_HOLIDAYS_URL=https://date.nager.at/api/v3
+
+# Optional (free tier 250 req/month)
+NUMVERIFY_ACCESS_KEY=
+```
+
+### backend/go.mod
+No new dependencies needed — all use standard `net/http` and `encoding/json`.
+
+### backend/internal/listings/routes.go
+Add:
+```go
+r.GET("/currencies", h.GetCurrencies)
+r.GET("/detect-location", h.DetectLocation)
+```
+
+---
+
+## Step 4 — Write Tests
+
+For each new package, create a test file:
+
+```go
+// backend/pkg/currency/currency_test.go
+func TestSupportedCurrencies(t *testing.T) {
+    codes, err := SupportedCurrencies()
+    if err != nil {
+        t.Skipf("API unavailable: %v", err)
+    }
+    if len(codes) < 30 {
+        t.Errorf("expected 30+ currencies, got %d", len(codes))
+    }
+}
+
+func TestConvert(t *testing.T) {
+    amount, err := Convert(100, "USD", "EGP")
+    if err != nil {
+        t.Skipf("API unavailable: %v", err)
+    }
+    if amount <= 0 {
+        t.Error("expected positive converted amount")
+    }
+    t.Logf("100 USD = %.2f EGP", amount)
+}
+```
+
+```go
+// backend/pkg/geo/ipgeo_test.go
+func TestLookupIP_Localhost(t *testing.T) {
+    info, err := LookupIP("127.0.0.1")
+    if err != nil {
+        t.Fatal(err)
+    }
+    // localhost returns default, should not error
+    t.Logf("localhost info: %+v", info)
+}
+```
+
+```go
+// backend/pkg/validation/email_test.go
+func TestValidateEmail_Valid(t *testing.T) {
+    valid, disposable, err := ValidateEmail("test@gmail.com")
+    if err != nil {
+        t.Skipf("API unavailable: %v", err)
+    }
+    if !valid {
+        t.Error("gmail.com should be valid")
+    }
+    if disposable {
+        t.Error("gmail.com should not be disposable")
+    }
+}
+```
+
+---
+
+## Step 5 — Commit Order
+
+```bash
+git add backend/pkg/currency/
+git commit -m "feat: currency package using Frankfurter API"
+
+git add backend/pkg/geo/
+git commit -m "feat: geo package — IP lookup + Nominatim geocoding"
+
+git add backend/pkg/validation/
+git commit -m "feat: validation package — email (EVA) + phone format"
+
+git add backend/pkg/calendar/
+git commit -m "feat: calendar package — public holidays (Nager.Date)"
+
+git add backend/internal/listings/handler.go backend/internal/listings/routes.go
+git commit -m "feat: listings — auto-geocode on create, currencies endpoint"
+
+git add backend/internal/auth/handler.go
+git commit -m "feat: auth — block disposable emails on register"
+
+git add backend/internal/users/handler.go
+git commit -m "feat: users — E.164 phone validation, detect-location endpoint"
+
+git add backend/.env.example
+git commit -m "chore: document public API env vars"
+```
+
+---
+
+## Step 6 — Final Verification
+
+Run these tests to confirm everything works:
+
+```bash
+# Currency API
+curl "http://localhost:8080/api/v1/currencies" | python -m json.tool
+
+# Location detection (returns your server's location)
+curl "http://localhost:8080/api/v1/detect-location" | python -m json.tool
+
+# Register with disposable email — should fail
+curl -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test","email":"test@mailinator.com","password":"password123"}'
+# Expected: 400 "Temporary email addresses are not allowed"
+
+# Register with real email — should succeed
+curl -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Test","email":"test@gmail.com","password":"password123"}'
+# Expected: 201
+
+# Create listing with address — lat/lng should be auto-filled
+curl -X POST http://localhost:8080/api/v1/listings \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Test listing",
+    "category_id": "...",
+    "description": "Test description for listing",
+    "price": 100,
+    "currency": "EGP",
+    "country": "EG",
+    "city": "Cairo",
+    "address": "Tahrir Square, Cairo"
+  }'
+# Expected: 201 with latitude and longitude populated
+```
+
+---
+
+## Important Rules
+
+- **Never block a request** if a public API is down — always have a fallback:
+  ```go
+  info, err := geo.LookupIP(ip)
+  if err != nil {
+      // Log it, but don't fail the request
+      logger.Warn("IP geo lookup failed", zap.Error(err))
+      info = &geo.IPInfo{} // empty defaults
+  }
+  ```
+
+- **Cache API responses** where possible using Redis:
+  ```go
+  // Cache currency list for 1 hour
+  cacheKey := "currencies:list"
+  // Try Redis first, then hit API, then cache result
+  ```
+
+- **Respect rate limits:**
+  - ip-api.com: 45 req/min → add Redis rate limit tracking
+  - Nominatim: 1 req/sec → add `time.Sleep(1 * time.Second)` in batch operations
+  - Frankfurter: no strict limit but cache results
+
+- **Timeouts:** All HTTP clients must have a timeout (already included in examples above — 4-5 seconds max)

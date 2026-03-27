@@ -1,0 +1,354 @@
+# GeoCore Mobile — React Native Prompt
+> انسخ وابعت لـ Replit Agent
+
+---
+
+## Mission
+
+Build a **production-ready React Native app** for GeoCore.
+
+- Works as standalone APK (Android) + IPA (iOS) — NOT Expo Go
+- Connects to backend: `https://geo-core-next.replit.app/api/v1`
+- Looks like **eBay** with **Walmart colors** (Blue #0071CE + Yellow #FFC220)
+
+---
+
+## Tech Stack
+
+```
+Framework:   React Native + Expo SDK 50
+Navigation:  React Navigation v6
+State:       Zustand
+HTTP:        Axios with interceptors
+Storage:     expo-secure-store (tokens)
+Icons:       @expo/vector-icons
+Build:       EAS Build (APK + IPA)
+Language:    TypeScript strict
+```
+
+---
+
+## Setup Commands
+
+```bash
+npx create-expo-app@latest mobile --template blank-typescript
+cd mobile
+
+npx expo install \
+  @react-navigation/native \
+  @react-navigation/stack \
+  @react-navigation/bottom-tabs \
+  react-native-screens \
+  react-native-safe-area-context \
+  react-native-gesture-handler \
+  @tanstack/react-query \
+  axios \
+  zustand \
+  expo-secure-store \
+  expo-image \
+  @expo/vector-icons \
+  react-native-reanimated
+```
+
+---
+
+## Colors (Use ONLY these)
+
+```typescript
+// src/constants/colors.ts
+export const Colors = {
+  primary: '#0071CE',      // Walmart Blue
+  secondary: '#FFC220',    // Walmart Yellow
+  background: '#F5F5F5',
+  white: '#FFFFFF',
+  dark: '#1A1A1A',
+  gray: '#888888',
+  lightGray: '#E8E8E8',
+  danger: '#E53935',
+}
+```
+
+---
+
+## Folder Structure
+
+```
+mobile/src/
+├── api/
+│   └── client.ts        ← axios + token interceptors
+├── store/
+│   └── auth.ts          ← zustand auth store
+├── navigation/
+│   ├── index.tsx        ← root navigator
+│   ├── AuthStack.tsx
+│   └── MainTabs.tsx     ← bottom tabs
+├── screens/
+│   ├── HomeScreen.tsx
+│   ├── ListingDetailScreen.tsx
+│   ├── AuctionsScreen.tsx
+│   ├── SearchScreen.tsx
+│   ├── CreateListingScreen.tsx
+│   ├── ChatScreen.tsx
+│   ├── ProfileScreen.tsx
+│   ├── LoginScreen.tsx
+│   └── RegisterScreen.tsx
+└── components/
+    ├── ListingCard.tsx
+    ├── AuctionCard.tsx
+    ├── CountdownTimer.tsx
+    └── SearchBar.tsx
+```
+
+---
+
+## Home Screen Layout
+
+```
+┌─────────────────────────────────┐
+│ 🔵 GeoCore Logo      🔔  👤    │  ← Blue header
+│ ┌─────────────────────────────┐ │
+│ │ 🔍  Search for anything...  │ │  ← White search bar
+│ └─────────────────────────────┘ │
+├─────────────────────────────────┤
+│ Categories                      │
+│ 🚗  🏠  📱  👕  🛋️  💼  →    │  ← Horizontal scroll
+├─────────────────────────────────┤
+│ ⚡ Live Auctions            All │
+│ [Card]  [Card]  [Card]  →      │  ← Horizontal with countdown
+├─────────────────────────────────┤
+│ Featured Listings               │
+│ [Card]  [Card]                  │  ← 2-column grid
+│ [Card]  [Card]                  │
+└─────────────────────────────────┘
+│ 🏠   🔨   ➕   💬   👤        │  ← Bottom nav
+│            (yellow floating)    │
+└─────────────────────────────────┘
+```
+
+---
+
+## Listing Card Rules
+
+Every card MUST have:
+1. **Badge:** 🔨 AUCTION (red) or ⚡ BUY NOW (blue) — absolute top-left
+2. **⭐ TOP** badge (yellow) if is_featured — absolute top-right
+3. **Countdown timer** if auction (live, updates every second)
+4. **Price** in primary blue color
+5. **Location** with 📍 icon
+
+```typescript
+// ListingCard.tsx
+export function ListingCard({ listing, onPress }) {
+  const isAuction = listing.type === 'auction'
+
+  return (
+    <TouchableOpacity style={styles.card} onPress={onPress}>
+      <View>
+        <Image
+          source={{ uri: listing.images?.[0]?.url || `https://picsum.photos/200/150?random=${listing.id}` }}
+          style={styles.image}
+        />
+        {/* AUCTION or BUY NOW badge */}
+        <View style={[styles.badge,
+          { backgroundColor: isAuction ? '#E53935' : '#0071CE' }]}>
+          <Text style={styles.badgeText}>
+            {isAuction ? '🔨 AUCTION' : '⚡ BUY NOW'}
+          </Text>
+        </View>
+        {listing.is_featured && (
+          <View style={[styles.badge, styles.topRight, { backgroundColor: '#FFC220' }]}>
+            <Text style={[styles.badgeText, { color: '#1A1A1A' }]}>⭐ TOP</Text>
+          </View>
+        )}
+      </View>
+      <View style={{ padding: 8 }}>
+        <Text numberOfLines={2} style={styles.title}>{listing.title}</Text>
+        <Text style={styles.price}>
+          {listing.currency} {Number(listing.price).toLocaleString()}
+        </Text>
+        {isAuction && <CountdownTimer endsAt={listing.ends_at} />}
+        <Text style={styles.location}>📍 {listing.city}</Text>
+      </View>
+    </TouchableOpacity>
+  )
+}
+```
+
+---
+
+## Countdown Timer (Live)
+
+```typescript
+// components/CountdownTimer.tsx
+export function CountdownTimer({ endsAt }) {
+  const [timeLeft, setTimeLeft] = useState('')
+  const [urgent, setUrgent] = useState(false)
+
+  useEffect(() => {
+    const tick = () => {
+      const diff = new Date(endsAt).getTime() - Date.now()
+      if (diff <= 0) { setTimeLeft('Ended'); return }
+      const h = Math.floor(diff / 3600000)
+      const m = Math.floor((diff % 3600000) / 60000)
+      const s = Math.floor((diff % 60000) / 1000)
+      setUrgent(diff < 300000)
+      setTimeLeft(h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`)
+    }
+    tick()
+    const t = setInterval(tick, 1000)
+    return () => clearInterval(t)
+  }, [endsAt])
+
+  return (
+    <Text style={{ color: urgent ? '#E53935' : '#888', fontSize: 11 }}>
+      ⏰ {timeLeft}
+    </Text>
+  )
+}
+```
+
+---
+
+## Bottom Navigation — Sell Button
+
+```typescript
+// The middle Sell tab must be a floating yellow circle
+<Tab.Screen
+  name="Sell"
+  component={CreateListingScreen}
+  options={{
+    tabBarButton: (props) => (
+      <TouchableOpacity
+        {...props}
+        style={{
+          width: 56, height: 56,
+          borderRadius: 28,
+          backgroundColor: '#FFC220',
+          alignItems: 'center',
+          justifyContent: 'center',
+          marginTop: -20,
+          shadowColor: '#FFC220',
+          shadowOpacity: 0.5,
+          shadowRadius: 10,
+          elevation: 8,
+        }}
+      >
+        <Text style={{ fontSize: 32, color: '#1A1A1A', fontWeight: 'bold' }}>+</Text>
+      </TouchableOpacity>
+    ),
+  }}
+/>
+```
+
+---
+
+## API Calls
+
+```typescript
+// src/api/client.ts
+import axios from 'axios'
+import * as SecureStore from 'expo-secure-store'
+
+const api = axios.create({
+  baseURL: 'https://geo-core-next.replit.app/api/v1',
+  timeout: 10000,
+})
+
+api.interceptors.request.use(async (config) => {
+  const token = await SecureStore.getItemAsync('access_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    if (error.response?.status === 401) {
+      const refresh = await SecureStore.getItemAsync('refresh_token')
+      if (refresh) {
+        try {
+          const { data } = await axios.post(
+            'https://geo-core-next.replit.app/api/v1/auth/refresh',
+            { refresh_token: refresh }
+          )
+          await SecureStore.setItemAsync('access_token', data.data.access_token)
+          error.config.headers.Authorization = `Bearer ${data.data.access_token}`
+          return api(error.config)
+        } catch {
+          await SecureStore.deleteItemAsync('access_token')
+          await SecureStore.deleteItemAsync('refresh_token')
+        }
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
+export default api
+```
+
+---
+
+## EAS Config for APK Build
+
+### eas.json
+```json
+{
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "android": { "buildType": "apk" }
+    },
+    "production": {
+      "android": { "buildType": "aab" }
+    }
+  }
+}
+```
+
+### app.json
+```json
+{
+  "expo": {
+    "name": "GeoCore",
+    "slug": "geocore-next",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "android": {
+      "package": "com.geocore.next",
+      "adaptiveIcon": {
+        "backgroundColor": "#0071CE"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.geocore.next"
+    }
+  }
+}
+```
+
+---
+
+## After Building
+
+```bash
+# Push to GitHub under /mobile folder
+git add .
+git commit -m "feat: React Native app — eBay UI, Walmart colors, EAS ready"
+git push origin main
+
+# Build APK for Android testing
+eas build --platform android --profile preview
+```
+
+---
+
+## Non-Negotiable Rules
+
+1. **TypeScript** everywhere — no `.js` files
+2. Tokens stored with `expo-secure-store` only
+3. Every listing card has AUCTION or BUY NOW badge
+4. Every auction shows live countdown timer
+5. Sell button = floating yellow circle in bottom nav
+6. Colors = ONLY #0071CE and #FFC220
+7. After done → push to GitHub `/mobile` folder

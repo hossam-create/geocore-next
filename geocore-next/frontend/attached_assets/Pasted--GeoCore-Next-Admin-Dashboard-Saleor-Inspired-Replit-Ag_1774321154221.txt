@@ -1,0 +1,976 @@
+# GeoCore Next — Admin Dashboard (Saleor-Inspired)
+> ابعت لـ Replit Agent
+
+---
+
+## Mission
+
+Build a **complete admin dashboard** for GeoCore Next.
+
+Use **Saleor Dashboard** as your visual and UX reference:
+- Read the source code at: https://github.com/saleor/saleor-dashboard
+- Study how they structure pages, tables, forms, and navigation
+- Copy the **design patterns and UX** — NOT the GraphQL/Saleor-specific code
+- Connect everything to **our REST API** at: `https://geo-core-next.replit.app/api/v1`
+
+---
+
+## Step 1 — Study Saleor Dashboard
+
+Read these files from Saleor to understand their patterns:
+
+```
+https://raw.githubusercontent.com/saleor/saleor-dashboard/main/src/components/AppLayout/AppLayout.tsx
+https://raw.githubusercontent.com/saleor/saleor-dashboard/main/src/components/TableCellHeader/TableCellHeader.tsx
+https://raw.githubusercontent.com/saleor/saleor-dashboard/main/src/products/components/ProductList/ProductList.tsx
+https://raw.githubusercontent.com/saleor/saleor-dashboard/main/src/customers/components/CustomerList/CustomerList.tsx
+https://raw.githubusercontent.com/saleor/saleor-dashboard/main/src/orders/components/OrderList/OrderList.tsx
+```
+
+From Saleor, adopt these UX patterns:
+- **Left sidebar** with dark background + sections + icons
+- **Data tables** with checkboxes, sortable columns, bulk actions
+- **Filter chips** above tables (status, date range, category)
+- **Detail pages** with card sections (split left/right layout)
+- **Breadcrumb navigation**
+- **Save bar** at bottom of forms (sticky with Cancel/Save)
+- **Status badges** with colors (active=green, pending=yellow, rejected=red)
+- **Confirmation dialogs** for destructive actions
+- **Empty states** with illustrations and CTA
+
+---
+
+## Step 2 — Tech Stack
+
+```bash
+# Create admin app
+mkdir frontend-admin && cd frontend-admin
+npm create vite@latest . -- --template react-ts
+
+npm install \
+  @tanstack/react-query \
+  @tanstack/react-table \
+  react-router-dom \
+  axios \
+  zustand \
+  react-hook-form \
+  zod \
+  @hookform/resolvers \
+  recharts \
+  lucide-react \
+  date-fns \
+  clsx \
+  tailwind-merge
+
+npx tailwindcss init -p
+npx shadcn@latest init
+npx shadcn@latest add button card table badge input select dialog sheet tabs separator skeleton alert-dialog dropdown-menu
+```
+
+---
+
+## Step 3 — Colors (Match Saleor's Clean Look)
+
+```css
+/* globals.css */
+:root {
+  --primary: #0071CE;
+  --secondary: #FFC220;
+  --sidebar-bg: #1B2559;      /* Saleor-like dark navy */
+  --sidebar-hover: #2D3A7A;
+  --sidebar-active: #0071CE;
+  --sidebar-text: #9CA3AF;
+  --sidebar-text-active: #FFFFFF;
+  --bg: #F4F6FA;
+  --card: #FFFFFF;
+  --border: #E5E7EB;
+  --text: #111827;
+  --text-muted: #6B7280;
+  --success: #059669;
+  --warning: #D97706;
+  --error: #DC2626;
+  --info: #2563EB;
+}
+```
+
+---
+
+## Step 4 — File Structure
+
+```
+frontend-admin/src/
+├── api/
+│   ├── client.ts          ← axios instance with admin JWT
+│   ├── dashboard.ts       ← stats + overview
+│   ├── listings.ts        ← listings CRUD + approve/reject
+│   ├── auctions.ts        ← auctions management
+│   ├── users.ts           ← users + groups + block
+│   ├── reports.ts         ← reports queue
+│   ├── payments.ts        ← payments + revenue
+│   ├── categories.ts      ← categories + custom fields
+│   └── pricing.ts         ← price plans
+│
+├── components/
+│   ├── layout/
+│   │   ├── AppLayout.tsx      ← main layout with sidebar
+│   │   ├── Sidebar.tsx        ← dark nav sidebar
+│   │   ├── TopBar.tsx         ← top header with search + admin info
+│   │   └── SaveBar.tsx        ← sticky bottom save/cancel bar
+│   ├── tables/
+│   │   ├── DataTable.tsx      ← reusable sortable table
+│   │   ├── TableFilters.tsx   ← filter chips row
+│   │   ├── BulkActions.tsx    ← bulk action bar
+│   │   └── Pagination.tsx
+│   ├── charts/
+│   │   ├── RevenueLineChart.tsx
+│   │   ├── ListingsPieChart.tsx
+│   │   └── ActivityBarChart.tsx
+│   └── ui/
+│       ├── StatusBadge.tsx    ← colored status badges
+│       ├── KPICard.tsx        ← stat card with trend
+│       ├── ConfirmDialog.tsx  ← delete/action confirmation
+│       ├── EmptyState.tsx     ← empty table state
+│       └── CountdownBadge.tsx ← for live auctions
+│
+├── pages/
+│   ├── auth/
+│   │   └── LoginPage.tsx
+│   ├── DashboardPage.tsx
+│   ├── listings/
+│   │   ├── ListingsListPage.tsx
+│   │   └── ListingDetailPage.tsx
+│   ├── auctions/
+│   │   ├── AuctionsListPage.tsx
+│   │   └── AuctionDetailPage.tsx
+│   ├── users/
+│   │   ├── UsersListPage.tsx
+│   │   └── UserDetailPage.tsx
+│   ├── reports/
+│   │   └── ReportsPage.tsx
+│   ├── payments/
+│   │   └── PaymentsPage.tsx
+│   ├── categories/
+│   │   ├── CategoriesPage.tsx
+│   │   └── CategoryFieldsPage.tsx
+│   ├── pricing/
+│   │   └── PricingPage.tsx
+│   ├── storefronts/
+│   │   └── StorefrontsPage.tsx
+│   └── settings/
+│       └── SettingsPage.tsx
+│
+├── store/
+│   └── auth.ts
+├── lib/
+│   └── utils.ts
+└── main.tsx
+```
+
+---
+
+## Step 5 — Sidebar (Study Saleor's AppLayout)
+
+```tsx
+// Saleor has sections with icons + labels + active state
+// Copy this exact pattern:
+
+const MENU_SECTIONS = [
+  {
+    section: null, // no label for first section
+    items: [
+      { icon: LayoutDashboard, label: "Dashboard", path: "/admin" },
+    ]
+  },
+  {
+    section: "Catalog",
+    items: [
+      { icon: Tag,      label: "Listings",    path: "/admin/listings",
+        badge: "pending_listings" },
+      { icon: Hammer,   label: "Auctions",    path: "/admin/auctions",
+        badge: "active_auctions" },
+      { icon: FolderOpen, label: "Categories", path: "/admin/categories" },
+      { icon: Store,    label: "Storefronts", path: "/admin/storefronts" },
+    ]
+  },
+  {
+    section: "Users",
+    items: [
+      { icon: Users,    label: "Customers",   path: "/admin/users" },
+      { icon: UserCog,  label: "Groups",      path: "/admin/groups" },
+      { icon: ShieldAlert, label: "Reports",  path: "/admin/reports",
+        badge: "open_reports" },
+    ]
+  },
+  {
+    section: "Sales",
+    items: [
+      { icon: CreditCard, label: "Payments",  path: "/admin/payments" },
+      { icon: DollarSign, label: "Price Plans",path: "/admin/pricing" },
+      { icon: Wallet,   label: "Balances",    path: "/admin/balances" },
+    ]
+  },
+  {
+    section: "Configuration",
+    items: [
+      { icon: Settings, label: "Settings",    path: "/admin/settings" },
+      { icon: Mail,     label: "Emails",      path: "/admin/emails" },
+      { icon: Shield,   label: "Staff",       path: "/admin/staff" },
+    ]
+  }
+]
+
+// Sidebar styling — match Saleor exactly:
+// - Dark navy background (#1B2559)
+// - Section labels in ALL CAPS, muted color, small
+// - Items: icon + label, subtle hover, bright active
+// - Logo at top, admin info at bottom
+// - Badges show real counts from API (live data)
+```
+
+---
+
+## Step 6 — Dashboard Page (Saleor Home Pattern)
+
+Saleor shows: activity summary + quick stats + recent orders.
+Adapt to: activity summary + quick stats + pending approvals.
+
+```tsx
+export function DashboardPage() {
+  // Auto-refresh stats every 30 seconds
+  const { data: stats } = useQuery({
+    queryKey: ["admin", "stats"],
+    queryFn: () => adminApi.getStats(),
+    refetchInterval: 30_000,
+  })
+
+  return (
+    <PageLayout title="Dashboard">
+
+      {/* Row 1: KPI Cards — like Saleor's home overview */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+        <KPICard
+          title="Revenue (30d)"
+          value={formatCurrency(stats?.revenue_30d)}
+          previousValue={formatCurrency(stats?.revenue_prev_30d)}
+          icon={DollarSign}
+          color="blue"
+        />
+        <KPICard
+          title="Active Listings"
+          value={stats?.active_listings}
+          previousValue={stats?.prev_active_listings}
+          icon={Tag}
+          color="green"
+        />
+        <KPICard
+          title="New Users (7d)"
+          value={stats?.new_users_7d}
+          icon={Users}
+          color="violet"
+        />
+        <KPICard
+          title="Live Auctions"
+          value={stats?.live_auctions}
+          icon={Hammer}
+          color="orange"
+        />
+      </div>
+
+      {/* Row 2: Charts */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
+        <div className="xl:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>Revenue</CardTitle>
+              <CardDescription>Last 30 days</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RevenueLineChart data={stats?.revenue_chart} />
+            </CardContent>
+          </Card>
+        </div>
+        <Card>
+          <CardHeader><CardTitle>Listings by Category</CardTitle></CardHeader>
+          <CardContent>
+            <ListingsPieChart data={stats?.by_category} />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Row 3: Activity (Saleor style) */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+        {/* Pending listings — most urgent */}
+        <div className="xl:col-span-2">
+          <Card>
+            <CardHeader className="flex-row justify-between items-center">
+              <CardTitle>Pending Approval</CardTitle>
+              <Link to="/admin/listings?status=pending"
+                className="text-sm text-primary hover:underline">
+                View all ({stats?.pending_listings})
+              </Link>
+            </CardHeader>
+            <CardContent className="p-0">
+              <PendingListingsPreview />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Today's activity */}
+        <Card>
+          <CardHeader><CardTitle>Today</CardTitle></CardHeader>
+          <CardContent>
+            <ActivityList stats={stats} />
+          </CardContent>
+        </Card>
+
+      </div>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+## Step 7 — Listings List Page (Saleor Product List Pattern)
+
+```tsx
+// Saleor's product list has:
+// - Filter bar with status chips
+// - Searchable, sortable table
+// - Checkbox + bulk actions
+// - Row click → detail page
+
+export function ListingsListPage() {
+  const [filters, setFilters] = useState({
+    status: "pending",
+    search: "",
+    category: "",
+    type: "",
+    page: 1,
+  })
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin", "listings", filters],
+    queryFn: () => adminApi.getListings(filters),
+    keepPreviousData: true,
+  })
+
+  return (
+    <PageLayout
+      title="Listings"
+      subtitle={`${data?.meta?.total?.toLocaleString() ?? "—"} total`}
+      actions={
+        <Button variant="outline" onClick={exportCSV}>
+          <Download className="w-4 h-4 mr-2" />
+          Export CSV
+        </Button>
+      }
+    >
+      {/* Filter chips — Saleor style */}
+      <Card className="mb-4">
+        <CardContent className="p-4">
+          <div className="flex flex-wrap gap-3 items-center">
+
+            {/* Status tabs */}
+            <div className="flex rounded-lg border divide-x overflow-hidden">
+              {["pending","active","sold","expired","rejected"].map(s => (
+                <button
+                  key={s}
+                  onClick={() => setFilters(f => ({ ...f, status: s, page: 1 }))}
+                  className={`px-4 py-2 text-sm font-medium capitalize transition-colors ${
+                    filters.status === s
+                      ? "bg-primary text-white"
+                      : "hover:bg-gray-50 text-gray-600"
+                  }`}
+                >
+                  {s}
+                  {s === "pending" && data?.pending_count > 0 && (
+                    <span className="ml-1.5 bg-red-500 text-white text-xs
+                      rounded-full px-1.5 py-0.5 font-bold">
+                      {data.pending_count}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {/* Search */}
+            <div className="relative flex-1 min-w-56">
+              <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+              <Input
+                className="pl-9"
+                placeholder="Search listings..."
+                value={filters.search}
+                onChange={e => setFilters(f => ({ ...f, search: e.target.value }))}
+              />
+            </div>
+
+            {/* Type filter */}
+            <Select value={filters.type}
+              onValueChange={v => setFilters(f => ({ ...f, type: v }))}>
+              <SelectTrigger className="w-36">
+                <SelectValue placeholder="All types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">All types</SelectItem>
+                <SelectItem value="sell">Sell</SelectItem>
+                <SelectItem value="auction">Auction</SelectItem>
+                <SelectItem value="dutch">Dutch</SelectItem>
+                <SelectItem value="reverse">Reverse</SelectItem>
+              </SelectContent>
+            </Select>
+
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Bulk actions bar — appears when items selected */}
+      {selectedIds.length > 0 && (
+        <BulkActionsBar
+          count={selectedIds.length}
+          onClear={() => setSelectedIds([])}
+          actions={[
+            {
+              label: "Approve",
+              icon: CheckCircle,
+              variant: "success",
+              onClick: () => bulkApprove(selectedIds),
+            },
+            {
+              label: "Reject",
+              icon: XCircle,
+              variant: "destructive",
+              onClick: () => setRejectDialogOpen(true),
+            },
+            {
+              label: "Feature",
+              icon: Star,
+              onClick: () => bulkFeature(selectedIds),
+            },
+          ]}
+        />
+      )}
+
+      {/* Main table */}
+      <Card>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">
+                <Checkbox
+                  checked={selectedIds.length === data?.data?.length}
+                  onCheckedChange={checked =>
+                    setSelectedIds(checked
+                      ? data?.data?.map((l:any) => l.id) ?? []
+                      : [])
+                  }
+                />
+              </TableHead>
+              <TableHead>Listing</TableHead>
+              <TableHead>Seller</TableHead>
+              <TableHead>Category</TableHead>
+              <TableHead>Price</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Location</TableHead>
+              <TableHead>Date</TableHead>
+              <TableHead className="w-32">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+
+          <TableBody>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={9}>
+                  <LoadingSkeleton rows={10} />
+                </TableCell>
+              </TableRow>
+            ) : data?.data?.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={9}>
+                  <EmptyState
+                    icon={Tag}
+                    title="No listings found"
+                    description="Try changing the filters"
+                  />
+                </TableCell>
+              </TableRow>
+            ) : data?.data?.map((listing: any) => (
+              <TableRow
+                key={listing.id}
+                className="cursor-pointer hover:bg-gray-50"
+                onClick={() => navigate(`/admin/listings/${listing.id}`)}
+              >
+                <TableCell onClick={e => e.stopPropagation()}>
+                  <Checkbox
+                    checked={selectedIds.includes(listing.id)}
+                    onCheckedChange={checked => {
+                      setSelectedIds(prev =>
+                        checked
+                          ? [...prev, listing.id]
+                          : prev.filter(id => id !== listing.id)
+                      )
+                    }}
+                  />
+                </TableCell>
+
+                <TableCell>
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={listing.images?.[0]?.url
+                        || `https://picsum.photos/48?random=${listing.id}`}
+                      className="w-12 h-12 rounded-lg object-cover shrink-0"
+                    />
+                    <div>
+                      <p className="font-medium text-sm line-clamp-1 max-w-48">
+                        {listing.title}
+                      </p>
+                      <p className="text-xs text-gray-400 font-mono">
+                        #{listing.id.slice(0,8)}
+                      </p>
+                    </div>
+                  </div>
+                </TableCell>
+
+                <TableCell className="text-sm">{listing.user?.name}</TableCell>
+                <TableCell className="text-sm">{listing.category?.name_en}</TableCell>
+
+                <TableCell className="text-sm font-semibold">
+                  {listing.price
+                    ? `${listing.currency} ${Number(listing.price).toLocaleString()}`
+                    : <span className="text-gray-400">—</span>
+                  }
+                </TableCell>
+
+                <TableCell>
+                  <TypeBadge type={listing.type} />
+                </TableCell>
+
+                <TableCell className="text-sm text-gray-500">
+                  {listing.city}, {listing.country}
+                </TableCell>
+
+                <TableCell className="text-xs text-gray-400">
+                  {format(new Date(listing.created_at), "MMM d, yyyy")}
+                </TableCell>
+
+                <TableCell onClick={e => e.stopPropagation()}>
+                  <div className="flex gap-1">
+                    {listing.status === "pending" && (
+                      <>
+                        <Button size="icon" variant="ghost"
+                          className="h-8 w-8 text-green-600 hover:bg-green-50"
+                          onClick={() => approveListing(listing.id)}>
+                          <Check className="w-4 h-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost"
+                          className="h-8 w-8 text-red-600 hover:bg-red-50"
+                          onClick={() => openRejectDialog(listing.id)}>
+                          <X className="w-4 h-4" />
+                        </Button>
+                      </>
+                    )}
+                    <Button size="icon" variant="ghost"
+                      className="h-8 w-8 text-yellow-600 hover:bg-yellow-50"
+                      onClick={() => toggleFeatured(listing)}>
+                      <Star className={`w-4 h-4 ${listing.is_featured ? "fill-yellow-400" : ""}`} />
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="icon" variant="ghost" className="h-8 w-8">
+                          <MoreHorizontal className="w-4 h-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => window.open(`/listings/${listing.slug || listing.id}`)}>
+                          <Eye className="w-4 h-4 mr-2" /> View on site
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="text-red-600"
+                          onClick={() => deleteListing(listing.id)}>
+                          <Trash2 className="w-4 h-4 mr-2" /> Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+
+        <div className="p-4 border-t">
+          <Pagination
+            page={filters.page}
+            total={data?.meta?.total ?? 0}
+            perPage={25}
+            onChange={page => setFilters(f => ({ ...f, page }))}
+          />
+        </div>
+      </Card>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+## Step 8 — Listing Detail Page (Saleor Product Detail Pattern)
+
+Saleor shows product details in a 2-column layout:
+- Left (wide): main info, description, images
+- Right (narrow): status, category, metadata
+
+```tsx
+export function ListingDetailPage() {
+  const { id } = useParams()
+  const { data: listing } = useQuery({
+    queryKey: ["admin", "listing", id],
+    queryFn: () => adminApi.getListing(id!),
+  })
+
+  return (
+    <PageLayout
+      title={listing?.title ?? "Listing"}
+      breadcrumbs={[
+        { label: "Listings", href: "/admin/listings" },
+        { label: listing?.title ?? "..." }
+      ]}
+    >
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+        {/* Left column — main content */}
+        <div className="xl:col-span-2 space-y-6">
+
+          {/* General info */}
+          <Card>
+            <CardHeader><CardTitle>Listing Information</CardTitle></CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label>Title</Label>
+                <p className="text-gray-900 mt-1">{listing?.title}</p>
+              </div>
+              <div>
+                <Label>Description</Label>
+                <p className="text-gray-600 mt-1 text-sm leading-relaxed">
+                  {listing?.description}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Price</Label>
+                  <p className="font-bold text-lg text-primary mt-1">
+                    {listing?.currency} {Number(listing?.price).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <Label>Condition</Label>
+                  <p className="mt-1">{listing?.condition}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Images */}
+          <Card>
+            <CardHeader><CardTitle>Images ({listing?.images?.length ?? 0})</CardTitle></CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-4 gap-3">
+                {listing?.images?.map((img: any) => (
+                  <div key={img.id} className="relative aspect-square rounded-lg overflow-hidden">
+                    <img src={img.url} className="w-full h-full object-cover" />
+                    {img.is_cover && (
+                      <span className="absolute top-1 left-1 bg-primary text-white
+                        text-xs px-1.5 py-0.5 rounded">Cover</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Custom fields */}
+          {listing?.attributes && Object.keys(listing.attributes).length > 0 && (
+            <Card>
+              <CardHeader><CardTitle>Details</CardTitle></CardHeader>
+              <CardContent>
+                <dl className="grid grid-cols-2 gap-3">
+                  {Object.entries(listing.attributes).map(([key, val]) => (
+                    <div key={key}>
+                      <dt className="text-xs text-gray-500 capitalize">
+                        {key.replace(/_/g, " ")}
+                      </dt>
+                      <dd className="text-sm font-medium mt-0.5">{String(val)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </CardContent>
+            </Card>
+          )}
+
+        </div>
+
+        {/* Right column — metadata */}
+        <div className="space-y-6">
+
+          {/* Status + Actions */}
+          <Card>
+            <CardHeader><CardTitle>Status</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <StatusBadge status={listing?.status} size="lg" />
+
+              {listing?.status === "pending" && (
+                <div className="flex gap-2 pt-2">
+                  <Button className="flex-1 bg-green-600 hover:bg-green-700"
+                    onClick={() => approve()}>
+                    <Check className="w-4 h-4 mr-1" /> Approve
+                  </Button>
+                  <Button variant="destructive" className="flex-1"
+                    onClick={() => setRejectOpen(true)}>
+                    <X className="w-4 h-4 mr-1" /> Reject
+                  </Button>
+                </div>
+              )}
+
+              <Separator />
+
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-500">Featured</span>
+                <Switch
+                  checked={listing?.is_featured}
+                  onCheckedChange={val => toggleFeatured(val)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Seller */}
+          <Card>
+            <CardHeader><CardTitle>Seller</CardTitle></CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-3 mb-3">
+                <Avatar>
+                  <AvatarFallback className="bg-primary text-white">
+                    {listing?.user?.name?.[0]}
+                  </AvatarFallback>
+                </Avatar>
+                <div>
+                  <p className="font-medium text-sm">{listing?.user?.name}</p>
+                  <p className="text-xs text-gray-500">⭐ {listing?.user?.rating?.toFixed(1)}</p>
+                </div>
+              </div>
+              <Button variant="outline" className="w-full" size="sm"
+                onClick={() => navigate(`/admin/users/${listing?.user_id}`)}>
+                View Profile
+              </Button>
+            </CardContent>
+          </Card>
+
+          {/* Location */}
+          <Card>
+            <CardHeader><CardTitle>Location</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Country</span>
+                <span className="font-medium">{listing?.country}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">City</span>
+                <span className="font-medium">{listing?.city}</span>
+              </div>
+              {listing?.address && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Address</span>
+                  <span className="font-medium text-right">{listing?.address}</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Timeline */}
+          <Card>
+            <CardHeader><CardTitle>Timeline</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Created</span>
+                <span>{format(new Date(listing?.created_at), "MMM d, yyyy")}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Updated</span>
+                <span>{format(new Date(listing?.updated_at), "MMM d, yyyy")}</span>
+              </div>
+              {listing?.expires_at && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Expires</span>
+                  <span>{format(new Date(listing?.expires_at), "MMM d, yyyy")}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-gray-500">Views</span>
+                <span>{listing?.view_count?.toLocaleString()}</span>
+              </div>
+            </CardContent>
+          </Card>
+
+        </div>
+      </div>
+    </PageLayout>
+  )
+}
+```
+
+---
+
+## Step 9 — Build All Remaining Pages
+
+Build these pages following the same 2-column Saleor pattern:
+
+### Users List + Detail
+- List: table with avatar, name, email, group, listing count, rating, status, join date
+- Detail: profile info (left) + stats + group + recent listings + wallet balance (right)
+- Actions: block/unblock, change group, add credit, view listings
+
+### Auctions Monitor
+- Grid of live auction cards with real-time countdown
+- Auto-refresh every 10 seconds
+- Each card: image, title, current bid, bid count, time left, seller
+- Actions: view bids, extend time, cancel auction
+
+### Reports Queue
+- List with type icon (listing/user), reason, reporter, date
+- Status filter: pending / resolved / dismissed
+- Actions: view reported item, resolve, take action (delete/ban)
+
+### Payments & Revenue
+- Top: 3 KPI cards (total revenue, featured fees, subscription revenue)
+- Chart: revenue over time (last 30/90 days toggle)
+- Table: all transactions with user, type, amount, status, date, Stripe ref
+
+### Categories + Custom Fields (2-panel)
+- Left panel: category tree with icons
+- Right panel: custom fields list for selected category
+- CRUD for fields: add/edit/delete/reorder
+
+### Price Plans
+- Cards layout (like pricing page on marketing sites)
+- Each card: plan name, price, features list, user count
+- Edit button → modal/sheet with full plan settings
+
+### Settings (Tabs)
+- General: site name, on/off switch, default currency
+- Listings: require approval, max images, listing duration
+- Auctions: anti-snipe minutes, max duration
+- Emails: template list with edit modal
+- Payments: Stripe key, featured listing prices
+
+---
+
+## Step 10 — API Client
+
+```typescript
+// src/api/client.ts
+import axios from "axios"
+
+const api = axios.create({
+  baseURL: "https://geo-core-next.replit.app/api/v1",
+})
+
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem("admin_token")
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+api.interceptors.response.use(
+  res => res,
+  async err => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem("admin_token")
+      window.location.href = "/admin/login"
+    }
+    return Promise.reject(err)
+  }
+)
+
+export default api
+
+// Admin-specific API calls
+export const adminApi = {
+  getStats: () => api.get("/admin/stats").then(r => r.data.data),
+  getListings: (params: any) => api.get("/admin/listings", { params }).then(r => r.data),
+  getListing: (id: string) => api.get(`/admin/listings/${id}`).then(r => r.data.data),
+  approveListing: (id: string) => api.post(`/admin/listings/${id}/approve`),
+  rejectListing: (id: string, reason: string) =>
+    api.post(`/admin/listings/${id}/reject`, { reason }),
+  featureListing: (id: string) => api.post(`/admin/listings/${id}/feature`),
+  getUsers: (params: any) => api.get("/admin/users", { params }).then(r => r.data),
+  blockUser: (id: string) => api.post(`/admin/users/${id}/block`),
+  unblockUser: (id: string) => api.post(`/admin/users/${id}/unblock`),
+  getReports: (params: any) => api.get("/admin/reports", { params }).then(r => r.data),
+  resolveReport: (id: string) => api.post(`/admin/reports/${id}/resolve`),
+  getPayments: (params: any) => api.get("/admin/payments", { params }).then(r => r.data),
+  getAuctions: (params: any) => api.get("/admin/auctions", { params }).then(r => r.data),
+}
+```
+
+---
+
+## Step 11 — Push to GitHub
+
+```bash
+cd frontend-admin
+git init
+git add .
+git commit -m "feat(admin): complete admin dashboard — Saleor-inspired
+- Dark sidebar with sections and live badges
+- Dashboard: KPI cards + revenue charts + pending queue
+- Listings: table + bulk approve/reject + detail page
+- Auctions: live monitor with auto-refresh
+- Users: management + block + group + wallet
+- Reports: queue with actions
+- Payments: revenue analytics
+- Categories: custom fields manager
+- Price Plans: card layout
+- Settings: tabbed configuration
+- Saleor UX patterns: 2-column detail, save bar, filter chips"
+
+git remote add origin https://github.com/hossam-create/geocore-next.git
+git push origin main
+```
+
+---
+
+## Final Report
+
+```
+═══════════════════════════════════════════
+GEOCORE ADMIN — SALEOR-INSPIRED BUILD REPORT
+═══════════════════════════════════════════
+
+Saleor patterns adopted:
+✅ Dark sidebar with sections + live badges
+✅ 2-column detail page layout
+✅ Bulk actions bar
+✅ Filter chips with status tabs
+✅ Sticky save bar on forms
+✅ Confirmation dialogs
+✅ Empty states with CTA
+✅ Breadcrumb navigation
+✅ Loading skeletons
+
+Pages built:
+✅ Dashboard (KPIs + charts + pending queue)
+✅ Listings list + detail
+✅ Auctions monitor
+✅ Users list + detail
+✅ Reports queue
+✅ Payments & revenue
+✅ Categories + custom fields
+✅ Price plans
+✅ Settings (tabbed)
+
+Build: npm run build — PASS/FAIL
+URL: https://geo-core-next.replit.app/admin
+GitHub: pushed ✅
+═══════════════════════════════════════════
+```

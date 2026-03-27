@@ -1,0 +1,19 @@
+apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: postgres-pvc
+    namespace: geocore
+    labels:
+      app: postgres
+      app.kubernetes.io/name: geocore
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 50Gi
+    storageClassName: standard
+    # For GKE: storageClassName: premium-rwo
+    # For EKS: storageClassName: gp3
+    # For AKS: storageClassName: managed-premium
+  

@@ -1,0 +1,723 @@
+# GeoCore Web — Next.js 15 Frontend Complete Build
+> ابعت لـ Replit Agent بعد ما يخلص الـ Mobile screens
+
+---
+
+## Mission
+
+Build the complete **Next.js 15 web frontend** for GeoCore.
+Same eBay style — same Walmart colors (#0071CE + #FFC220).
+Desktop + Mobile responsive.
+
+**Backend API:** `https://geo-core-next.replit.app/api/v1`
+
+---
+
+## Step 1 — Read Existing Frontend Code
+
+```bash
+find frontend/src -name "*.tsx" -o -name "*.ts" | sort
+cat frontend/src/app/page.tsx
+cat frontend/src/lib/api.ts
+cat frontend/src/store/auth.ts
+cat frontend/src/types/index.ts
+```
+
+Note what's already built vs missing.
+
+---
+
+## Step 2 — Install Missing Dependencies
+
+```bash
+cd frontend
+npm install \
+  @tanstack/react-query \
+  axios \
+  zustand \
+  react-hook-form \
+  zod \
+  @hookform/resolvers \
+  lucide-react \
+  date-fns \
+  clsx \
+  tailwind-merge
+```
+
+---
+
+## Step 3 — Tailwind Config (Walmart Colors)
+
+### tailwind.config.ts
+```typescript
+import type { Config } from 'tailwindcss'
+
+const config: Config = {
+  content: ['./src/**/*.{js,ts,jsx,tsx,mdx}'],
+  theme: {
+    extend: {
+      colors: {
+        primary: '#0071CE',
+        secondary: '#FFC220',
+        dark: '#1A1A1A',
+      },
+    },
+  },
+  plugins: [],
+}
+export default config
+```
+
+---
+
+## Step 4 — Global Layout
+
+### src/app/layout.tsx
+```typescript
+import type { Metadata } from 'next'
+import { Inter } from 'next/font/google'
+import './globals.css'
+import { Providers } from '@/components/Providers'
+import { Header } from '@/components/layout/Header'
+import { Footer } from '@/components/layout/Footer'
+
+const inter = Inter({ subsets: ['latin'] })
+
+export const metadata: Metadata = {
+  title: 'GeoCore — Buy, Sell, Bid',
+  description: 'Global classifieds and auctions platform',
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body className={inter.className}>
+        <Providers>
+          <Header />
+          <main className="min-h-screen bg-gray-50">
+            {children}
+          </main>
+          <Footer />
+        </Providers>
+      </body>
+    </html>
+  )
+}
+```
+
+---
+
+## Step 5 — Header Component
+
+### src/components/layout/Header.tsx
+```typescript
+'use client'
+import Link from 'next/link'
+import { Search, Bell, Heart, MessageCircle, User, ChevronDown } from 'lucide-react'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+
+export function Header() {
+  const [query, setQuery] = useState('')
+  const router = useRouter()
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (query.trim()) router.push(`/search?q=${encodeURIComponent(query)}`)
+  }
+
+  return (
+    <header className="bg-primary text-white sticky top-0 z-50 shadow-lg">
+      {/* Top Bar */}
+      <div className="max-w-7xl mx-auto px-4">
+        <div className="flex items-center gap-4 py-3">
+
+          {/* Logo */}
+          <Link href="/" className="text-secondary font-bold text-2xl tracking-wide shrink-0">
+            GeoCore
+          </Link>
+
+          {/* Search Bar */}
+          <form onSubmit={handleSearch} className="flex-1 flex">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search for anything..."
+              className="flex-1 px-4 py-2.5 text-gray-800 text-sm rounded-l-lg outline-none"
+            />
+            <button
+              type="submit"
+              className="bg-secondary text-dark px-5 py-2.5 rounded-r-lg font-semibold text-sm hover:bg-yellow-400 transition-colors"
+            >
+              Search
+            </button>
+          </form>
+
+          {/* Right Icons */}
+          <div className="flex items-center gap-4 shrink-0">
+            <Link href="/watchlist" className="hidden md:flex flex-col items-center text-xs hover:text-secondary">
+              <Heart size={20} />
+              <span>Watchlist</span>
+            </Link>
+            <Link href="/messages" className="hidden md:flex flex-col items-center text-xs hover:text-secondary">
+              <MessageCircle size={20} />
+              <span>Messages</span>
+            </Link>
+            <Link href="/profile" className="flex flex-col items-center text-xs hover:text-secondary">
+              <User size={20} />
+              <span>Account</span>
+            </Link>
+          </div>
+        </div>
+
+        {/* Category Nav */}
+        <nav className="flex items-center gap-6 py-2 text-sm overflow-x-auto">
+          {[
+            { label: 'All Categories', href: '/listings' },
+            { label: '🚗 Vehicles', href: '/listings?category=vehicles' },
+            { label: '🏠 Real Estate', href: '/listings?category=real-estate' },
+            { label: '📱 Electronics', href: '/listings?category=electronics' },
+            { label: '👕 Clothing', href: '/listings?category=clothing' },
+            { label: '🛋️ Furniture', href: '/listings?category=furniture' },
+            { label: '⚡ Auctions', href: '/auctions' },
+          ].map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className="whitespace-nowrap hover:text-secondary transition-colors"
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+      </div>
+    </header>
+  )
+}
+```
+
+---
+
+## Step 6 — Homepage
+
+### src/app/page.tsx
+```typescript
+import { CategorySection } from '@/components/home/CategorySection'
+import { LiveAuctions } from '@/components/home/LiveAuctions'
+import { FeaturedListings } from '@/components/home/FeaturedListings'
+import { HeroBanner } from '@/components/home/HeroBanner'
+
+export default function HomePage() {
+  return (
+    <div>
+      <HeroBanner />
+      <div className="max-w-7xl mx-auto px-4 py-8 space-y-10">
+        <CategorySection />
+        <LiveAuctions />
+        <FeaturedListings />
+      </div>
+    </div>
+  )
+}
+```
+
+### src/components/home/HeroBanner.tsx
+```typescript
+'use client'
+import Link from 'next/link'
+
+export function HeroBanner() {
+  return (
+    <div className="bg-gradient-to-r from-primary to-blue-700 text-white py-12 px-4">
+      <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8">
+        <div>
+          <h1 className="text-4xl md:text-5xl font-bold">
+            Buy. Sell. <span className="text-secondary">Bid.</span>
+          </h1>
+          <p className="text-lg text-blue-100 mt-3 max-w-md">
+            Millions of listings. Real-time auctions. Global marketplace.
+          </p>
+          <div className="flex gap-3 mt-6">
+            <Link href="/listings"
+              className="bg-secondary text-dark px-6 py-3 rounded-lg font-bold hover:bg-yellow-400 transition-colors">
+              Browse Listings
+            </Link>
+            <Link href="/auctions"
+              className="border-2 border-white text-white px-6 py-3 rounded-lg font-bold hover:bg-white hover:text-primary transition-colors">
+              Live Auctions
+            </Link>
+          </div>
+        </div>
+        <div className="text-8xl hidden md:block">🌍</div>
+      </div>
+    </div>
+  )
+}
+```
+
+### src/components/home/LiveAuctions.tsx
+```typescript
+'use client'
+import { useQuery } from '@tanstack/react-query'
+import api from '@/lib/api'
+import { AuctionCard } from '@/components/listings/AuctionCard'
+import Link from 'next/link'
+
+export function LiveAuctions() {
+  const { data: auctions, isLoading } = useQuery({
+    queryKey: ['auctions', 'active'],
+    queryFn: () => api.get('/auctions?per_page=8').then(r => r.data.data),
+  })
+
+  if (isLoading) return <div className="h-48 bg-gray-100 animate-pulse rounded-xl" />
+  if (!auctions?.length) return null
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-2xl font-bold text-dark flex items-center gap-2">
+          <span className="text-red-500">⚡</span> Live Auctions
+        </h2>
+        <Link href="/auctions" className="text-primary text-sm font-medium hover:underline">
+          See all →
+        </Link>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {auctions.map((auction: any) => (
+          <AuctionCard key={auction.id} auction={auction} />
+        ))}
+      </div>
+    </section>
+  )
+}
+```
+
+### src/components/home/FeaturedListings.tsx
+```typescript
+'use client'
+import { useQuery } from '@tanstack/react-query'
+import api from '@/lib/api'
+import { ListingCard } from '@/components/listings/ListingCard'
+import Link from 'next/link'
+
+export function FeaturedListings() {
+  const { data: listings, isLoading } = useQuery({
+    queryKey: ['listings', 'featured'],
+    queryFn: () => api.get('/listings?is_featured=true&per_page=12').then(r => r.data.data),
+  })
+
+  if (isLoading) return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {[...Array(8)].map((_, i) => (
+        <div key={i} className="h-64 bg-gray-100 animate-pulse rounded-xl" />
+      ))}
+    </div>
+  )
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-2xl font-bold text-dark">⭐ Featured Listings</h2>
+        <Link href="/listings" className="text-primary text-sm font-medium hover:underline">
+          See all →
+        </Link>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        {listings?.map((listing: any) => (
+          <ListingCard key={listing.id} listing={listing} />
+        ))}
+      </div>
+    </section>
+  )
+}
+```
+
+---
+
+## Step 7 — Listing Card Component
+
+### src/components/listings/ListingCard.tsx
+```typescript
+import Link from 'next/link'
+import Image from 'next/image'
+import { CountdownTimer } from '@/components/ui/CountdownTimer'
+import { formatPrice } from '@/lib/utils'
+
+export function ListingCard({ listing }: { listing: any }) {
+  const isAuction = listing.type === 'auction'
+
+  return (
+    <Link href={`/listings/${listing.id}`}>
+      <div className="bg-white rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow cursor-pointer group">
+        <div className="relative">
+          <img
+            src={listing.images?.[0]?.url || `https://picsum.photos/300/200?random=${listing.id}`}
+            alt={listing.title}
+            className="w-full h-44 object-cover group-hover:scale-105 transition-transform duration-300"
+          />
+          {/* Type Badge */}
+          <span className={`absolute top-2 left-2 text-white text-xs font-bold px-2 py-1 rounded
+            ${isAuction ? 'bg-red-500' : 'bg-primary'}`}>
+            {isAuction ? '🔨 AUCTION' : '⚡ BUY NOW'}
+          </span>
+          {/* Featured Badge */}
+          {listing.is_featured && (
+            <span className="absolute top-2 right-2 bg-secondary text-dark text-xs font-bold px-2 py-1 rounded">
+              ⭐ TOP
+            </span>
+          )}
+        </div>
+        <div className="p-3">
+          <p className="text-sm text-dark font-medium line-clamp-2 leading-snug">
+            {listing.title}
+          </p>
+          <p className="text-lg font-bold text-primary mt-1">
+            {formatPrice(listing.price, listing.currency)}
+          </p>
+          {isAuction && listing.ends_at && (
+            <CountdownTimer endsAt={listing.ends_at} />
+          )}
+          <p className="text-xs text-gray-400 mt-1">📍 {listing.city}</p>
+        </div>
+      </div>
+    </Link>
+  )
+}
+```
+
+---
+
+## Step 8 — Key Pages
+
+### src/app/listings/page.tsx (Browse All)
+```typescript
+'use client'
+import { useQuery } from '@tanstack/react-query'
+import { useSearchParams } from 'next/navigation'
+import api from '@/lib/api'
+import { ListingCard } from '@/components/listings/ListingCard'
+import { FiltersPanel } from '@/components/listings/FiltersPanel'
+
+export default function ListingsPage() {
+  const searchParams = useSearchParams()
+  const q = searchParams.get('q') || ''
+  const category = searchParams.get('category') || ''
+  const sort = searchParams.get('sort') || 'newest'
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['listings', q, category, sort],
+    queryFn: () => api.get(`/listings?q=${q}&category=${category}&sort=${sort}&per_page=24`)
+      .then(r => r.data),
+  })
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="flex gap-6">
+        {/* Filters sidebar */}
+        <FiltersPanel />
+
+        {/* Results */}
+        <div className="flex-1">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-gray-500 text-sm">
+              {data?.meta?.total?.toLocaleString() || 0} results
+            </p>
+            <select
+              className="border rounded-lg px-3 py-2 text-sm"
+              defaultValue={sort}
+            >
+              <option value="newest">Newest First</option>
+              <option value="price_asc">Price: Low to High</option>
+              <option value="price_desc">Price: High to Low</option>
+              <option value="popular">Most Popular</option>
+            </select>
+          </div>
+
+          {isLoading ? (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {[...Array(12)].map((_, i) => (
+                <div key={i} className="h-64 bg-gray-100 animate-pulse rounded-xl" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {data?.data?.map((listing: any) => (
+                <ListingCard key={listing.id} listing={listing} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+### src/app/listings/[id]/page.tsx (Detail)
+```typescript
+import api from '@/lib/api'
+import { ListingDetailClient } from '@/components/listings/ListingDetailClient'
+
+export default async function ListingDetailPage({ params }: { params: { id: string } }) {
+  const { data } = await api.get(`/listings/${params.id}`)
+  return <ListingDetailClient listing={data.data} />
+}
+```
+
+### src/app/auctions/page.tsx
+```typescript
+'use client'
+import { useQuery } from '@tanstack/react-query'
+import api from '@/lib/api'
+import { AuctionCard } from '@/components/listings/AuctionCard'
+
+export default function AuctionsPage() {
+  const { data: auctions, isLoading } = useQuery({
+    queryKey: ['auctions'],
+    queryFn: () => api.get('/auctions?per_page=24').then(r => r.data.data),
+  })
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-8">
+      <h1 className="text-3xl font-bold text-dark mb-2">⚡ Live Auctions</h1>
+      <p className="text-gray-500 mb-6">Bid on thousands of items ending soon</p>
+
+      {isLoading ? (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[...Array(8)].map((_, i) => (
+            <div key={i} className="h-64 bg-gray-100 animate-pulse rounded-xl" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {auctions?.map((auction: any) => (
+            <AuctionCard key={auction.id} auction={auction} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+### src/app/(auth)/login/page.tsx
+```typescript
+'use client'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { useAuthStore } from '@/store/auth'
+
+export default function LoginPage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const { login } = useAuthStore()
+  const router = useRouter()
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    try {
+      await login(email, password)
+      router.push('/')
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Invalid email or password')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
+      <div className="max-w-md w-full">
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-primary">GeoCore</h1>
+          <p className="text-gray-500 mt-1">Sign in to your account</p>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-sm p-8">
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg p-3 mb-4 text-sm">
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Email</label>
+              <input
+                type="email" value={email} onChange={e => setEmail(e.target.value)}
+                placeholder="your@email.com" required
+                className="w-full border rounded-lg px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium text-gray-700 block mb-1">Password</label>
+              <input
+                type="password" value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••" required
+                className="w-full border rounded-lg px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+
+            <button
+              type="submit" disabled={loading}
+              className="w-full bg-primary text-white py-3 rounded-lg font-bold text-sm hover:bg-blue-700 transition-colors disabled:opacity-60"
+            >
+              {loading ? 'Signing in...' : 'Sign In'}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-sm text-gray-500">
+            Don't have an account?{' '}
+            <Link href="/register" className="text-primary font-medium hover:underline">
+              Sign up
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Step 9 — Utility Functions
+
+### src/lib/utils.ts
+```typescript
+export function formatPrice(price: number, currency: string = 'USD'): string {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(price)
+  } catch {
+    return `${currency} ${Number(price).toLocaleString()}`
+  }
+}
+
+export function getCountdown(endsAt: string): string {
+  const diff = new Date(endsAt).getTime() - Date.now()
+  if (diff <= 0) return 'Ended'
+  const h = Math.floor(diff / 3600000)
+  const m = Math.floor((diff % 3600000) / 60000)
+  const s = Math.floor((diff % 60000) / 1000)
+  if (h > 24) return `${Math.floor(h / 24)}d ${h % 24}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m ${s}s`
+}
+
+export function cn(...classes: string[]) {
+  return classes.filter(Boolean).join(' ')
+}
+```
+
+### src/components/ui/CountdownTimer.tsx
+```typescript
+'use client'
+import { useState, useEffect } from 'react'
+import { getCountdown } from '@/lib/utils'
+
+export function CountdownTimer({ endsAt }: { endsAt: string }) {
+  const [timeLeft, setTimeLeft] = useState(getCountdown(endsAt))
+  const isUrgent = new Date(endsAt).getTime() - Date.now() < 300000
+
+  useEffect(() => {
+    const t = setInterval(() => setTimeLeft(getCountdown(endsAt)), 1000)
+    return () => clearInterval(t)
+  }, [endsAt])
+
+  return (
+    <p className={`text-xs mt-1 font-medium ${isUrgent ? 'text-red-500' : 'text-gray-400'}`}>
+      ⏰ {timeLeft}
+    </p>
+  )
+}
+```
+
+---
+
+## Step 10 — Providers (React Query + Auth)
+
+### src/components/Providers.tsx
+```typescript
+'use client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useState } from 'react'
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const [queryClient] = useState(() => new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 60 * 1000,
+        retry: 1,
+      },
+    },
+  }))
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      {children}
+    </QueryClientProvider>
+  )
+}
+```
+
+---
+
+## Step 11 — Push to GitHub
+
+```bash
+cd frontend
+git add .
+git commit -m "feat: Next.js 15 web frontend complete
+- Homepage: Hero + Categories + Live Auctions + Featured Listings
+- Listings browse page with filters + grid
+- Auction detail with live countdown
+- Login + Register pages
+- Responsive design (mobile + desktop)
+- Walmart colors: #0071CE + #FFC220
+- React Query for data fetching
+- Zustand for auth state"
+git push origin main
+```
+
+---
+
+## Step 12 — Verify
+
+```bash
+cd frontend
+npm run build  # must pass with 0 errors
+npm run start  # test on http://localhost:3000
+```
+
+Check these pages work:
+- [ ] `/` — Homepage loads with listings
+- [ ] `/listings` — Browse page with grid
+- [ ] `/auctions` — Live auctions with countdowns
+- [ ] `/listings/[id]` — Detail page
+- [ ] `/login` — Login form
+- [ ] Mobile responsive (test at 390px width)
+
+---
+
+## Report Back With
+
+```
+✅ npm run build: PASS
+✅ Pages working: Home, Listings, Auctions, Detail, Login
+✅ GitHub push: done
+✅ URL: https://geo-core-next.replit.app
+
+Screenshot of homepage: [attach]
+```

@@ -1,0 +1,345 @@
+# GeoCore Community — Feature Analysis
+## المصدر الأصلي vs الـ Rebuild الجديد
+
+> للمراجعة فقط — لا تعدل في geocore-next بناءً على هذا الملف
+
+---
+
+## 📊 ملخص سريع
+
+| المجال | الأصلي PHP | geocore-next Go | الفجوة |
+|--------|-----------|----------------|--------|
+| Listing Types | 5 أنواع | 3 أنواع | ⚠️ ناقص |
+| Auction Types | 4 أنواع | 1 نوع فقط | ❌ كبير |
+| Pricing System | معقد جداً | بسيط | ❌ كبير |
+| Payment Methods | 4+ طرق | Stripe فقط | ⚠️ |
+| User Groups | ✅ متكامل | ❌ غير موجود | ❌ |
+| Storefront | ✅ كامل | ❌ غير موجود | ❌ |
+| Addons System | ✅ 20+ addon | ❌ غير موجود | ❌ |
+| Multi-language | 20+ لغة | EN + AR فقط | ⚠️ |
+| Admin Panel | ✅ شامل جداً | ⚠️ أساسي | ⚠️ |
+| SEO URLs | ✅ mod_rewrite | ❌ | ⚠️ |
+
+---
+
+## 🏷️ 1. أنواع الـ Listings
+
+### الأصلي PHP — 5 أنواع
+| النوع | الوصف | في geocore-next؟ |
+|-------|-------|----------------|
+| **Classified Ad** | إعلان مبوب عادي | ✅ موجود |
+| **Buy Now Only** | اشتري فوراً بسعر ثابت | ✅ موجود |
+| **Standard Auction** | مزاد تصاعدي عادي | ✅ موجود |
+| **Dutch Auction** | مزاد متعدد الكميات — الفائزون بأعلى الأسعار يدفعون سعر أقل فائز | ❌ **ناقص** |
+| **Reverse Auction** | المشتري هو اللي يطلب والبائعون يتنافسون بسعر أقل | ❌ **ناقص** |
+
+### ما هو Dutch Auction؟
+> مثال: البائع عنده 10 آيفون → 5 مشترين يقدموا عروض → كل الفائزين يدفعوا **نفس** سعر أقل عرض فائز
+
+### ما هو Reverse Auction؟
+> مثال: شركة محتاجة خدمة تصميم → موردين يتنافسوا بأسعار أقل → الأرخص يكسب
+
+---
+
+## 🔨 2. نظام الـ Auctions — التفاصيل
+
+### الأصلي PHP
+- **Proxy Bidding** ✅ — المزايد يحدد سعر أقصى والنظام يزايد عنه تلقائياً
+- **Straight Bidding** ✅ — مزايدة مباشرة بدون proxy
+- **Dutch Auction** ✅ — متعدد الكميات
+- **Reverse Auction** ✅ — عروض البائعين
+- **Final Value Fee** ✅ — عمولة على البائع بعد نهاية المزاد (نسبة مئوية أو مبلغ ثابت)
+- **Reserve Price** ✅ — سعر احتياطي سري
+- **Buy It Now + Auction** ✅ — نفس الـ listing فيها الاتنين
+- **Quantity Auctions** ✅ — بيع عدة وحدات من نفس الـ item
+
+### geocore-next Go
+- **Proxy Bidding (Auto-bid)** ✅
+- **Anti-sniping** ✅ (+5 دقائق)
+- **Reserve Price** ✅
+- **Buy Now Price** ✅
+- **Dutch/Reverse** ❌ ناقصين
+
+---
+
+## 💰 3. نظام التسعير (الأكثر تعقيداً)
+
+### الأصلي PHP — نظام متكامل جداً
+```
+أنواع Price Plans:
+├── Free — مجاني تماماً
+├── Fee-based — رسوم ثابتة لكل listing
+├── Subscription — اشتراك شهري/سنوي
+└── Enterprise Pricing (addon) — تسعير معقد جداً
+
+User Groups + Price Plans:
+├── كل user group عنده price plan خاص
+├── ممكن تخصص أسعار مختلفة لكل فئة
+├── Recurring billing للـ subscriptions
+└── Account Balance — رصيد داخلي
+```
+
+### Pricing Features في الأصلي
+- **Listing Fees** — رسوم نشر الإعلان
+- **Upgrade Fees** — رسوم ترقية لـ featured/bold/attention getter
+- **Subscription Plans** — اشتراك شهري بعدد محدد من الإعلانات
+- **Final Value Fee** — عمولة على سعر البيع النهائي
+- **Account Balance** — رصيد داخلي للمستخدم
+- **Free Listings** — إعلانات مجانية مع حد أقصى
+
+### geocore-next Go
+- **Featured Listing** ✅ (Stripe - 7d/30d)
+- بس! — باقي التسعير ❌ ناقص كله
+
+---
+
+## 👥 4. نظام User Groups
+
+### الأصلي PHP
+```
+User Groups System:
+├── كل مستخدم ينتمي لـ group
+├── كل group عندها:
+│   ├── Price plan خاص
+│   ├── صلاحيات مختلفة (كم listing؟ أي features؟)
+│   ├── Max listings per period
+│   └── Access to certain categories only
+├── Admin يقدر يحرك users بين groups
+└── Groups خاصة للشركات/المنظمات
+```
+
+### geocore-next Go
+- **Roles**: user / admin / moderator ✅
+- لكن **لا يوجد** نظام groups متكامل ❌
+
+---
+
+## 🏪 5. Storefront System (مهم جداً!)
+
+### الأصلي PHP — ميزة مميزة
+كل بائع عنده Storefront خاص بيه:
+```
+الـ Storefront يحتوي على:
+├── URL خاص (geocore.com/stores/mybusiness)
+├── Logo خاص للبائع
+├── Welcome message
+├── Custom categories خاصة بالبائع
+├── Custom pages إضافية
+├── Newsletter للـ subscribers
+├── Traffic monitoring (إحصائيات)
+└── Storefront template مختار
+```
+
+### geocore-next Go
+- ❌ لا يوجد Storefront على الإطلاق
+
+---
+
+## 🔌 6. Addons System
+
+### الأصلي PHP — 20+ Addon مجاني
+الـ addons المتاحة تشمل:
+
+| Addon | الوظيفة | في geocore-next؟ |
+|-------|---------|----------------|
+| **Account Balance** | رصيد داخلي للمستخدم | ❌ |
+| **Anonymous Listings** | نشر بدون تسجيل (زي Craigslist) | ❌ |
+| **Attention Getter** | صورة جانبية مميزة بجانب الإعلان | ❌ |
+| **Bulk Uploader** | رفع إعلانات بالجملة (CSV) | ❌ |
+| **Enterprise Pricing** | تسعير متقدم جداً | ❌ |
+| **Featured Level** | مستويات featured متعددة | ⚠️ جزئي |
+| **Listing Export** | تصدير إعلانات CSV/XML | ❌ |
+| **SEO URLs** | روابط صديقة لمحركات البحث | ❌ |
+| **Sharing** | مشاركة على Social Media | ❌ |
+| **Signs & Flyers** | طباعة إعلان كـ flyer | ❌ |
+| **Social Connect** | تسجيل بـ Facebook | ⚠️ Google فقط |
+| **Storefront** | متجر خاص للبائع | ❌ |
+| **ZIP Code Search** | بحث بالكود البريدي | ❌ |
+| **Main Email Sender** | نظام البريد الإلكتروني | ⚠️ جزئي |
+| **Forum Bridge** | ربط مع vBulletin/Phorum | ❌ |
+| **Oodle/RSS** | تغذية RSS للإعلانات | ❌ |
+
+---
+
+## 📧 7. Email Notifications
+
+### الأصلي PHP
+- New registration notification
+- New listing notification  
+- Listing approved/rejected
+- Bid placed notification
+- Outbid notification
+- Auction ending soon (24h, 1h)
+- Auction won
+- Listing expiry warning
+- New message notification
+- Payment confirmation
+- Password reset
+- Weekly digest
+
+### geocore-next Go
+- ⚠️ موجود في الكود لكن لم يُتحقق منه كاملاً
+
+---
+
+## 🌍 8. Multi-language & Multi-currency
+
+### الأصلي PHP
+- أكثر من 20 لغة مترجمة بواسطة المستخدمين الأصليين
+- كل نص في الموقع قابل للترجمة
+- دعم RTL (عربي، عبري)
+- أي عملة
+
+### geocore-next Go
+- EN + AR ✅
+- Multi-currency ✅ (مع Frankfurter API)
+- لكن لا يوجد نظام ترجمة ديناميكي للمستخدمين
+
+---
+
+## 🛡️ 9. Admin Panel
+
+### الأصلي PHP — شامل جداً
+```
+Admin → Users:
+├── View/Edit any user account
+├── Login as user (masquerade)
+├── Suspend/unsuspend user
+├── Move user between groups
+├── IP ban (ban entire countries)
+├── View user's listings + transactions
+└── Reset password
+
+Admin → Listings:
+├── Approve/reject listings
+├── Edit any listing
+├── Bulk approve/delete
+├── Featured/unfeatured
+├── Move to different category
+└── Export to CSV/XML
+
+Admin → Pricing:
+├── Create price plans
+├── Attach to user groups
+├── Set listing fees per category
+├── Set featured upgrade prices
+└── Manage subscriptions
+
+Admin → Reports/Stats:
+├── Revenue reports
+├── Listing stats by category
+├── User registration stats
+├── Auction performance stats
+└── Payment history
+
+Admin → Settings:
+├── Site configuration
+├── Email templates
+├── Category management
+├── Custom fields per category
+└── Theme management
+```
+
+### geocore-next Go
+- Listings approve/reject ✅
+- User block/unblock ✅
+- Reports queue ✅
+- Dashboard stats ✅
+- Pricing management ❌
+- Custom fields ❌
+- Email templates ❌
+- Theme management ❌
+
+---
+
+## 🔍 10. Search & SEO
+
+### الأصلي PHP
+- Full-text search
+- Category + location search
+- ZIP code radius search (addon)
+- SEO-friendly URLs (mod_rewrite addon)
+- RSS feeds للإعلانات
+- Sitemap generation
+- Meta tags per listing
+
+### geocore-next Go
+- Full-text search ✅ (Meilisearch)
+- Category + location ✅
+- AI semantic search ✅ (pgvector)
+- SEO URLs ❌
+- RSS feeds ❌
+- Sitemap ❌
+
+---
+
+## 💳 11. Payment Methods
+
+### الأصلي PHP
+- PayPal ✅
+- Credit Card (Authorize.net) ✅
+- Check/Money Order ✅
+- Account Balance (internal) ✅
+
+### geocore-next Go
+- Stripe ✅
+- PayPal ❌
+- Account Balance ❌
+
+---
+
+## 📝 12. Custom Fields
+
+### الأصلي PHP — ميزة قوية جداً
+```
+كل category ممكن عندها custom fields:
+├── Vehicles → Make, Model, Year, Mileage, Color
+├── Real Estate → Bedrooms, Bathrooms, Area (sqm)
+├── Jobs → Job Type, Experience Level, Salary
+└── Animals → Breed, Age, Gender, Vaccinated
+```
+
+### geocore-next Go
+- ❌ لا يوجد custom fields system
+- يوجد `attributes JSONB` في DB لكن بدون UI
+
+---
+
+## 🎯 الأولويات — إيه الأهم تضيفه للـ geocore-next
+
+### 🔴 P0 — مش هينجح بدونها
+1. **Dutch Auction** — فارق تنافسي مهم
+2. **Custom Fields per Category** — أساسي للـ UX
+3. **Pricing System** — لازم يكون فيه revenue model
+4. **ZIP/Radius Search** — مهم لـ geo platform
+
+### 🟡 P1 — مهم للـ V1.1
+5. **Storefront** — يميز المنصة عن المنافسين
+6. **Account Balance** — يسهّل المدفوعات
+7. **Bulk Upload** — للـ business sellers
+8. **SEO URLs** — للـ organic traffic
+9. **RSS Feeds** — للـ syndication
+10. **Anonymous Listings** — يكبّر قاعدة المستخدمين
+
+### 🟢 P2 — للمستقبل
+11. Reverse Auction
+12. Forum Bridge
+13. Addon system architecture
+14. 20+ languages
+
+---
+
+## ⚠️ ملاحظة مهمة
+
+الأصلي PHP بُني على **15+ سنة** من الخبرة والـ feedback من آلاف المستخدمين.
+
+كل feature فيه موجودة لسبب — حلّت مشكلة حقيقية لعملاء حقيقيين.
+
+geocore-next لديه ميزة كبيرة في:
+- ✅ Real-time (WebSocket بدل polling)
+- ✅ Mobile API جاهز
+- ✅ AI features
+- ✅ Modern architecture
+- ✅ Performance (Go vs PHP)
+
+لكن محتاج يلحق الـ business features الأساسية.

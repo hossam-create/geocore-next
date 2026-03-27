@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: postgres
+    namespace: geocore
+    labels:
+      app: postgres
+      app.kubernetes.io/name: geocore
+      tier: database
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: postgres
+    strategy:
+      type: Recreate          # PVC allows only one pod at a time
+    template:
+      metadata:
+        labels:
+          app: postgres
+          tier: database
+      spec:
+        terminationGracePeriodSeconds: 60
+        containers:
+          - name: postgres
+            image: pgvector/pgvector:pg16
+            imagePullPolicy: IfNotPresent
+            ports:
+              - containerPort: 5432
+                name: postgres
+            env:
+              - name: POSTGRES_DB
+                valueFrom:
+                  configMapKeyRef:
+                    name: geocore-config
+                    key: POSTGRES_DB
+              - name: POSTGRES_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: geocore-secrets
+                    key: POSTGRES_USER
+              - name: POSTGRES_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: geocore-secrets
+                    key: POSTGRES_PASSWORD
+              - name: PGDATA
+                value: /var/lib/postgresql/data/pgdata
+            resources:
+              requests:
+                cpu: "250m"
+                memory: "512Mi"
+              limits:
+                cpu: "1000m"
+                memory: "2Gi"
+            volumeMounts:
+              - name: postgres-storage
+                mountPath: /var/lib/postgresql/data
+            livenessProbe:
+              exec:
+                command: ["pg_isready", "-U", "geocore"]
+              initialDelaySeconds: 30
+              periodSeconds: 10
+              timeoutSeconds: 5
+            readinessProbe:
+              exec:
+                command: ["pg_isready", "-U", "geocore"]
+              initialDelaySeconds: 5
+              periodSeconds: 5
+        volumes:
+          - name: postgres-storage
+            persistentVolumeClaim:
+              claimName: postgres-pvc
+  

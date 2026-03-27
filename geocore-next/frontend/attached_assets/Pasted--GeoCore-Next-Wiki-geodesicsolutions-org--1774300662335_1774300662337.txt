@@ -1,0 +1,451 @@
+# GeoCore Next — خريطة إكمال النواقص
+## مبني على الـ Wiki الرسمي لـ geodesicsolutions.org
+
+---
+
+## 📊 الوضع الحالي
+
+```
+geocore-next دلوقتي = 60% من الـ Original
+المتبقي = 40% features أساسية محتاج تتضاف
+```
+
+---
+
+## 🔴 المرحلة 1 — P0 (لازم قبل أي launch)
+
+### 1.1 Dutch Auction (أهم حاجة ناقصة)
+
+النوع ده فيه multiple items for auction وكل bidder يقدر يكسب واحد أو أكتر من الكمية الكلية — والسعر النهائي بيتحدد بأقل عرض فائز لكن الـ higher bidders مضمونين كامياتهم.
+
+**إزاي نضيفه في geocore-next:**
+```go
+// backend/internal/auctions/model.go
+// أضف للـ Auction struct:
+AuctionType   string  `gorm:"default:standard" json:"auction_type"` 
+// standard | dutch | reverse | buy_now_only
+Quantity       int     `gorm:"default:1" json:"quantity"`
+QuantityLeft   int     `json:"quantity_left"`
+
+// Dutch Auction Logic:
+// - Multiple winners allowed (up to quantity)
+// - All winners pay the LOWEST winning bid
+// - Track winning bids array not just current_bid
+```
+
+**Tasks:**
+- [ ] إضافة `auction_type` و `quantity` للـ Auction model
+- [ ] Dutch Auction bidding logic (winners pay lowest winning bid)
+- [ ] Reverse Auction logic (price goes DOWN with each bid)
+- [ ] Buy Now Only (no bidding, just buy)
+- [ ] Quantity tracking
+
+---
+
+### 1.2 Custom Fields per Category (ضروري للـ UX)
+
+الـ "listings" في النظام ممكن تشمل classifieds، standard auctions، dutch auctions، reverse auctions، و buy now only — وكل category عندها custom fields خاصة بيها.
+
+**الفكرة:**
+```
+🚗 Vehicles    → Make, Model, Year, Mileage, Color, Engine
+🏠 Real Estate → Bedrooms, Bathrooms, Area (sqm), Floor, Furnished
+📱 Electronics → Brand, Model, Storage, RAM, Condition
+💼 Jobs        → Job Type, Salary, Experience, Remote/Onsite
+🐾 Animals     → Breed, Age, Gender, Vaccinated, Pedigree
+```
+
+**إزاي نضيفه:**
+```go
+// backend/internal/categories/model.go (جديد)
+type CategoryField struct {
+    ID           uuid.UUID `gorm:"primaryKey"`
+    CategoryID   uuid.UUID `gorm:"index"`
+    Name         string    // "make", "model", "year"
+    Label        string    // "Make", "Model", "Year"
+    LabelAr      string    // "الماركة", "الموديل"
+    FieldType    string    // text | number | select | checkbox | date
+    Options      string    // JSON: ["Toyota","Honda","BMW"]
+    IsRequired   bool
+    IsSearchable bool      // يظهر في فلاتر البحث
+    SortOrder    int
+}
+
+// في الـ Listing model:
+// Attributes JSONB موجود بالفعل ✅
+// بس محتاج UI + validation بناءً على الـ category
+```
+
+**Tasks:**
+- [ ] `CategoryField` model + migration
+- [ ] Admin API: CRUD على custom fields per category
+- [ ] Listing create/edit: يعرض الـ fields بناءً على الـ category المختارة
+- [ ] Search: فلاتر ديناميكية بناءً على custom fields
+- [ ] Seed: إضافة default fields للـ 10 categories الموجودة
+
+---
+
+### 1.3 Price Plans System (نظام التسعير)
+
+Price plan بيتربط بكل user group وبيخليك تحسب على المستخدمين في الـ group ده بطريقة معينة. كل user group ممكن يكون عنده price plan مختلف.
+
+**أنواع التسعير في الأصلي:**
+```
+1. Free       — مجاني تماماً
+2. Fee-based  — رسوم لكل listing
+3. Subscription — اشتراك شهري/سنوي بـ X إعلان
+4. Hybrid     — مجاني + upgrade options
+```
+
+**إزاي نضيفه:**
+```go
+// backend/internal/pricing/model.go (جديد)
+type PricePlan struct {
+    ID                uuid.UUID `gorm:"primaryKey"`
+    Name              string
+    Type              string    // free | fee | subscription
+    ListingFee        float64   // رسوم لكل إعلان
+    FeaturedFee       float64   // رسوم featured
+    MaxListings       int       // -1 = unlimited
+    MaxImagesPerListing int
+    AuctionAllowed    bool
+    DutchAuctionAllowed bool
+    Currency          string
+    BillingPeriod     string    // monthly | yearly | once
+    Price             float64   // سعر الاشتراك
+}
+
+type UserGroup struct {
+    ID          uuid.UUID `gorm:"primaryKey"`
+    Name        string
+    PricePlanID uuid.UUID
+    MaxListings int
+    IsDefault   bool      // الـ group الافتراضية للـ new users
+}
+```
+
+**Tasks:**
+- [ ] `PricePlan` + `UserGroup` models
+- [ ] ربط كل user بـ user group عند التسجيل
+- [ ] Admin: إنشاء/تعديل price plans
+- [ ] Listing creation يتحقق من الـ price plan الخاص بالمستخدم
+- [ ] Final Value Fee: عمولة من سعر البيع النهائي
+
+---
+
+### 1.4 Anonymous Listings (زي Craigslist)
+
+الـ Anonymous Listings Addon يسمح للبائعين بنشر إعلانات بدون عملية تسجيل — العملية مشابهة لما هو متاح في مواقع مجانية كتيرة زي Craigslist و Kijiji و Gumtree.
+
+**إزاي نضيفه:**
+```go
+// في listings handler:
+// لو مفيش token → anonymous listing
+// بيطلب: email فقط (للتحقق والتواصل)
+// بيبعت email فيه رابط لإدارة الإعلان
+// Admin بيعتمده قبل ما يظهر
+
+type AnonymousListing struct {
+    ListingID    uuid.UUID
+    Email        string
+    ManageToken  string // UUID secret لإدارة الإعلان
+    ExpiresAt    time.Time
+}
+```
+
+---
+
+## 🟡 المرحلة 2 — P1 (بعد الـ Launch بـ 30 يوم)
+
+### 2.1 Storefront System
+
+كل بائع عنده Storefront خاص فيه URL خاص، وقدرة على عرض listings، وإحصائيات traffic، وintegration مع Geographic Navigation filters.
+
+**إزاي نضيفه:**
+```go
+// backend/internal/storefronts/model.go (جديد)
+type Storefront struct {
+    ID          uuid.UUID
+    UserID      uuid.UUID      // gorm:"uniqueIndex"
+    Slug        string         // "geocore.com/stores/ahmed-phones"
+    Name        string
+    Description string
+    LogoURL     string
+    BannerURL   string
+    WelcomeMsg  string
+    IsActive    bool
+    Views       int
+    // Relations
+    CustomPages []StorefrontPage
+}
+```
+
+**Frontend:** `geocore.com/stores/[slug]` يعرض:
+- كل إعلانات البائع
+- معلوماته + تقييمه
+- زر للتواصل معاه
+- Custom categories خاصة بيه
+
+---
+
+### 2.2 Account Balance (رصيد داخلي)
+
+الـ Account Balance Addon بيزود موقعك بـ account balance billing ويسمح لبعض أو كل المستخدمين بالاحتفاظ برصيد داخلي في الموقع.
+
+```go
+// في users model أضف:
+Balance   float64 `gorm:"default:0" json:"balance"`
+Currency  string  `gorm:"default:USD" json:"currency"`
+
+// Transactions table
+type BalanceTransaction struct {
+    ID        uuid.UUID
+    UserID    uuid.UUID
+    Amount    float64
+    Type      string    // credit | debit | listing_fee | featured_fee | refund
+    Reference string    // listing ID أو payment ID
+    Note      string
+    CreatedAt time.Time
+}
+```
+
+**Use cases:**
+- دفع رسوم الإعلانات من الرصيد
+- استرداد المبالغ للرصيد
+- شحن الرصيد بـ Stripe
+
+---
+
+### 2.3 SEO URLs
+
+الـ SEO Addon بيسمح بنشر الموقع بـ Search Engine Friendly URLs لزيادة فهرسة الصفحات — بيتم عن طريق Apache mod_rewrite.
+
+**في geocore-next (Next.js يعمله تلقائياً! ✅)**
+
+لكن للـ Backend API:
+```
+بدل: /api/v1/listings/uuid-here
+نضيف: /listings/iphone-15-pro-max-cairo-123
+```
+
+```go
+// في Listing model أضف:
+Slug string `gorm:"uniqueIndex" json:"slug"`
+
+// Auto-generate on create:
+// "iphone-15-pro-max" + city + short-id
+// مثال: iphone-15-pro-max-cairo-a3f2
+```
+
+---
+
+### 2.4 ZIP/Radius Search
+
+الـ ZIP/Postal Code Search Addon أداة بحث متعددة الاستخدامات تسمح للعملاء بإجراء بحث ديناميكي بالكود البريدي في classifieds أو auctions أو directory listings.
+
+**إزاي نضيفه:**
+```go
+// في listings handler List():
+if radius := c.Query("radius"); radius != "" {
+    lat := c.Query("lat")
+    lng := c.Query("lng")
+    // PostGIS query:
+    // WHERE ST_DWithin(
+    //   ST_MakePoint(longitude, latitude)::geography,
+    //   ST_MakePoint($lng, $lat)::geography,
+    //   $radius * 1000  -- km to meters
+    // )
+}
+```
+
+الـ PostGIS موجود في الـ DB بالفعل ✅ — بس محتاج يتفعّل في الـ search query.
+
+---
+
+### 2.5 Listing Export (CSV/XML)
+
+الـ Listing Export Addon بيوفر قدرة البحث وتصدير classifieds وauctions وlistings بـ CSV أو XML — الناتج ممكن يُستخدم في تطبيقات تانية زي تلك المستخدمة لإنتاج وسائل الطباعة.
+
+```go
+// GET /api/v1/admin/listings/export?format=csv&status=active
+func (h *Handler) ExportListings(c *gin.Context) {
+    format := c.DefaultQuery("format", "csv")
+    // query listings → generate CSV or XML → return as download
+}
+```
+
+---
+
+### 2.6 Attention Getter
+
+الـ Attention Getter Addon بيوفر فرصة دخل إضافي من خلال تحصيل رسوم من البائعين مقابل عرض صورة "attention getter" بجانب إعلانهم في نتائج البحث.
+
+**في geocore-next:**
+```go
+// في Listing model أضف:
+AttentionGetterURL string `json:"attention_getter_url,omitempty"`
+AttentionGetterExp *time.Time `json:"attention_getter_expires,omitempty"`
+```
+
+ده بيخلي الإعلان يظهر بصورة جانبية مميزة في قوايم البحث.
+
+---
+
+### 2.7 Bulk Uploader
+
+الـ Bulk Uploader Addon بيسمح للـ site administrator برفع كميات كبيرة من classifieds أو auction listings للمستخدمين.
+
+```go
+// POST /api/v1/admin/listings/bulk-import
+// Content-Type: multipart/form-data
+// file: listings.csv
+
+// CSV format:
+// title,description,price,currency,category,country,city,condition
+```
+
+---
+
+## 🟢 المرحلة 3 — P2 (V2 - المستقبل)
+
+### 3.1 Multi-Admin System
+
+الـ Multi-Admin Addon بيديك القدرة على إنشاء Admin Users إضافيين وإعطائهم صلاحيات محددة على أقسام معينة من الـ Admin Control Panel.
+
+```go
+// Admin Roles + Permissions
+type AdminPermission struct {
+    AdminID    uuid.UUID
+    Resource   string  // "listings", "users", "payments"
+    CanView    bool
+    CanEdit    bool
+    CanDelete  bool
+    CanApprove bool
+}
+```
+
+---
+
+### 3.2 Tokens System
+
+إضافة addon للـ tokens وقدرة المستخدمين على شراء tokens.
+
+Tokens = عملة داخلية بديلة للرصيد التقليدي.
+
+---
+
+### 3.3 Signs & Flyers
+
+الـ Signs & Flyers Addon بيعطي العملاء القدرة على طباعة لافتة أو flyer بسهولة عبر نموذج ديناميكي لكل classified أو listing أو auction نشط.
+
+Generate PDF قابل للطباعة لكل إعلان.
+
+---
+
+### 3.4 RSS Feeds
+
+```go
+// GET /feeds/listings.rss
+// GET /feeds/auctions.rss  
+// GET /feeds/listings?category=vehicles&format=rss
+```
+
+---
+
+### 3.5 Pedigree Tree (للحيوانات)
+
+الـ Pedigree Tree Addon بيوفر قدرة جمع معلومات النسب وعرضها بتنسيق شجرة داخل أي من الـ classified ads أو directory listings أو auctions.
+
+---
+
+## 📋 ملخص المهام بالترتيب
+
+```
+✅ موجود دلوقتي:
+- Standard Auction + Anti-sniping + Auto-bid
+- Listings CRUD + Search + Images
+- Auth (JWT + OAuth)
+- Chat (WebSocket)
+- Payments (Stripe)
+- Reviews + Reports
+- Admin Panel (أساسي)
+- AI Features
+
+🔴 P0 — قبل الـ Launch:
+□ TASK-101: Dutch Auction type
+□ TASK-102: Reverse Auction type  
+□ TASK-103: Buy Now Only Auction
+□ TASK-104: Custom Fields per Category
+□ TASK-105: Category Field Admin UI
+□ TASK-106: Price Plans System
+□ TASK-107: User Groups System
+□ TASK-108: Anonymous Listings
+□ TASK-109: Radius/ZIP Search (PostGIS)
+□ TASK-110: Listing Slugs (SEO URLs)
+
+🟡 P1 — بعد الـ Launch بـ 30 يوم:
+□ TASK-111: Storefront System
+□ TASK-112: Account Balance
+□ TASK-113: Balance Transactions
+□ TASK-114: Attention Getter Feature
+□ TASK-115: Listing Export (CSV/XML)
+□ TASK-116: Bulk Import (CSV)
+□ TASK-117: Final Value Fee
+□ TASK-118: Listing Quantity (Dutch)
+
+🟢 P2 — V2:
+□ TASK-119: Multi-Admin Permissions
+□ TASK-120: Tokens System
+□ TASK-121: Signs & Flyers (PDF)
+□ TASK-122: RSS Feeds
+□ TASK-123: Pedigree Tree
+□ TASK-124: QR Code per Listing
+□ TASK-125: Twitter/Social Feed per Listing
+```
+
+---
+
+## 🎯 إزاي نبدأ الآن
+
+### البرومبت اللي تبعته لـ Cursor/Replit:
+
+```
+Read CLAUDE.md and TASKS.md in https://github.com/hossam-create/geocore-next
+
+Then implement these features in order:
+
+TASK-101: Dutch Auction
+- Add auction_type field: standard | dutch | reverse | buy_now_only
+- Add quantity and quantity_left fields to Auction model
+- Dutch logic: multiple winners, all pay lowest winning bid
+- File: backend/internal/auctions/model.go + handler.go
+
+TASK-104: Custom Fields per Category  
+- New model: CategoryField (id, category_id, name, label, type, options, is_required, is_searchable)
+- Admin API: GET/POST/PUT/DELETE /api/v1/admin/categories/:id/fields
+- Listing API: GET /api/v1/categories/:id/fields (for form building)
+- File: backend/internal/categories/model.go (new)
+
+TASK-109: Radius Search
+- Add radius parameter to GET /api/v1/listings
+- Use PostGIS ST_DWithin query
+- Parameters: lat, lng, radius (km)
+- File: backend/internal/listings/handler.go
+
+TASK-110: SEO Slugs
+- Add slug field to Listing model
+- Auto-generate on create: title-city-shortid
+- Add GET /listings/[slug] route alias
+- File: backend/internal/listings/model.go + routes.go
+
+Commit after each task. Do not break existing functionality.
+```
+
+---
+
+## ⚠️ المبدأ الأهم
+
+> المشروع الأصلي بُني على **15 سنة** من الخبرة.
+> كل feature فيه حلّت مشكلة حقيقية.
+> geocore-next عنده ميزة في الـ real-time والـ AI والـ mobile.
+> الهدف = أفضل الاتنين في مشروع واحد.

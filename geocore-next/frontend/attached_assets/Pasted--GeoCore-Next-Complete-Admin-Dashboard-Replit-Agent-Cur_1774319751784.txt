@@ -1,0 +1,1133 @@
+# GeoCore Next — Complete Admin Dashboard
+> ابعت لـ Replit Agent أو Cursor
+
+---
+
+## Mission
+
+Build a **world-class admin dashboard** for GeoCore Next.
+
+Inspiration: **Saleor Dashboard** (https://github.com/saleor/saleor-dashboard)
+- Clean, modern React SPA
+- Sidebar navigation with sections
+- Data tables with filters + bulk actions
+- Real-time stats with charts
+- Full CRUD for everything
+
+**Backend API:** `https://geo-core-next.replit.app/api/v1`
+**Admin credentials:** role = "admin" in JWT
+
+---
+
+## Tech Stack
+
+```
+Framework:   React 18 + Vite
+Language:    TypeScript strict
+UI:          shadcn/ui + Tailwind CSS
+Charts:      Recharts
+Tables:      TanStack Table v8
+State:       TanStack Query (server) + Zustand (local)
+HTTP:        Axios with interceptors
+Forms:       React Hook Form + Zod
+Icons:       Lucide React
+Routing:     React Router v6
+```
+
+---
+
+## Setup
+
+```bash
+cd frontend-admin
+npm create vite@latest . -- --template react-ts
+npm install \
+  @tanstack/react-query \
+  @tanstack/react-table \
+  react-router-dom \
+  axios \
+  zustand \
+  react-hook-form \
+  zod \
+  @hookform/resolvers \
+  recharts \
+  lucide-react \
+  date-fns \
+  clsx \
+  tailwind-merge
+
+# shadcn/ui
+npx shadcn@latest init
+npx shadcn@latest add button card table badge input select dialog sheet tabs
+```
+
+---
+
+## Folder Structure
+
+```
+frontend-admin/src/
+├── api/
+│   ├── client.ts           ← axios + auth interceptor
+│   ├── stats.ts
+│   ├── listings.ts
+│   ├── auctions.ts
+│   ├── users.ts
+│   ├── reports.ts
+│   ├── payments.ts
+│   ├── categories.ts
+│   └── pricing.ts
+├── components/
+│   ├── layout/
+│   │   ├── Sidebar.tsx     ← main navigation
+│   │   ├── Header.tsx      ← top bar
+│   │   └── Layout.tsx      ← wrapper
+│   ├── ui/                 ← shadcn components
+│   ├── tables/
+│   │   ├── DataTable.tsx   ← reusable table
+│   │   └── Pagination.tsx
+│   └── charts/
+│       ├── RevenueChart.tsx
+│       └── ActivityChart.tsx
+├── pages/
+│   ├── LoginPage.tsx
+│   ├── DashboardPage.tsx
+│   ├── listings/
+│   │   ├── ListingsPage.tsx
+│   │   └── ListingDetailPage.tsx
+│   ├── auctions/
+│   │   ├── AuctionsPage.tsx
+│   │   └── AuctionDetailPage.tsx
+│   ├── users/
+│   │   ├── UsersPage.tsx
+│   │   └── UserDetailPage.tsx
+│   ├── reports/
+│   │   └── ReportsPage.tsx
+│   ├── payments/
+│   │   └── PaymentsPage.tsx
+│   ├── categories/
+│   │   ├── CategoriesPage.tsx
+│   │   └── CategoryFieldsPage.tsx
+│   ├── pricing/
+│   │   └── PricingPage.tsx
+│   ├── storefronts/
+│   │   └── StorefrontsPage.tsx
+│   └── settings/
+│       └── SettingsPage.tsx
+├── store/
+│   └── auth.ts
+└── main.tsx
+```
+
+---
+
+## Colors & Theme
+
+```css
+/* Inspired by Saleor — clean, professional */
+:root {
+  --primary: #0071CE;      /* Walmart Blue */
+  --secondary: #FFC220;    /* Walmart Yellow */
+  --sidebar-bg: #1A1A2E;   /* Dark navy sidebar */
+  --sidebar-text: #A0AEC0;
+  --sidebar-active: #0071CE;
+  --background: #F7FAFC;
+  --card: #FFFFFF;
+  --border: #E2E8F0;
+  --text: #1A202C;
+  --text-muted: #718096;
+  --success: #48BB78;
+  --warning: #ECC94B;
+  --danger: #FC8181;
+}
+```
+
+---
+
+## Layout — Sidebar Navigation
+
+```typescript
+// src/components/layout/Sidebar.tsx
+
+const navigation = [
+  {
+    section: "Overview",
+    items: [
+      { icon: LayoutDashboard, label: "Dashboard", path: "/admin" },
+    ]
+  },
+  {
+    section: "Marketplace",
+    items: [
+      { icon: Tag, label: "Listings", path: "/admin/listings", badge: "pending" },
+      { icon: Hammer, label: "Auctions", path: "/admin/auctions" },
+      { icon: Store, label: "Storefronts", path: "/admin/storefronts" },
+      { icon: Grid, label: "Categories", path: "/admin/categories" },
+    ]
+  },
+  {
+    section: "Users",
+    items: [
+      { icon: Users, label: "All Users", path: "/admin/users" },
+      { icon: UserCog, label: "User Groups", path: "/admin/groups" },
+      { icon: Flag, label: "Reports", path: "/admin/reports", badge: "open" },
+    ]
+  },
+  {
+    section: "Finance",
+    items: [
+      { icon: CreditCard, label: "Payments", path: "/admin/payments" },
+      { icon: DollarSign, label: "Price Plans", path: "/admin/pricing" },
+      { icon: Wallet, label: "Balances", path: "/admin/balances" },
+    ]
+  },
+  {
+    section: "System",
+    items: [
+      { icon: Settings, label: "Site Settings", path: "/admin/settings" },
+      { icon: Bell, label: "Email Templates", path: "/admin/emails" },
+      { icon: Shield, label: "Staff Users", path: "/admin/staff" },
+    ]
+  }
+]
+
+export function Sidebar() {
+  const location = useLocation()
+
+  return (
+    <aside className="w-64 min-h-screen bg-[#1A1A2E] flex flex-col">
+      {/* Logo */}
+      <div className="p-6 border-b border-white/10">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+            <Globe className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <p className="text-white font-bold text-lg">GeoCore</p>
+            <p className="text-white/40 text-xs">Admin Panel</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 p-4 space-y-6 overflow-y-auto">
+        {navigation.map((section) => (
+          <div key={section.section}>
+            <p className="text-white/30 text-xs font-semibold uppercase tracking-wider mb-2 px-2">
+              {section.section}
+            </p>
+            <div className="space-y-1">
+              {section.items.map((item) => {
+                const isActive = location.pathname === item.path
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
+                      isActive
+                        ? "bg-primary text-white font-medium"
+                        : "text-white/60 hover:text-white hover:bg-white/10"
+                    }`}
+                  >
+                    <item.icon className="w-4 h-4 shrink-0" />
+                    <span className="flex-1">{item.label}</span>
+                    {item.badge && <PendingBadge type={item.badge} />}
+                  </Link>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
+
+      {/* Admin user info */}
+      <div className="p-4 border-t border-white/10">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-primary/30 flex items-center justify-center">
+            <UserCircle className="w-5 h-5 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-medium truncate">{admin?.name}</p>
+            <p className="text-white/40 text-xs">Administrator</p>
+          </div>
+          <button onClick={logout} className="text-white/40 hover:text-white">
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </aside>
+  )
+}
+```
+
+---
+
+## Page 1 — Dashboard Overview
+
+```typescript
+// src/pages/DashboardPage.tsx
+
+export function DashboardPage() {
+  const { data: stats } = useQuery({
+    queryKey: ["admin", "stats"],
+    queryFn: () => api.get("/admin/stats").then(r => r.data.data),
+    refetchInterval: 30000, // refresh every 30s
+  })
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+        <p className="text-gray-500 text-sm">Welcome back. Here's what's happening.</p>
+      </div>
+
+      {/* KPI Cards — Saleor style */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPICard
+          title="Total Revenue"
+          value={formatCurrency(stats?.total_revenue)}
+          change="+12.5%"
+          trend="up"
+          icon={DollarSign}
+          color="blue"
+        />
+        <KPICard
+          title="Active Listings"
+          value={stats?.active_listings?.toLocaleString()}
+          change="+8.2%"
+          trend="up"
+          icon={Tag}
+          color="green"
+        />
+        <KPICard
+          title="Total Users"
+          value={stats?.total_users?.toLocaleString()}
+          change="+3.1%"
+          trend="up"
+          icon={Users}
+          color="purple"
+        />
+        <KPICard
+          title="Live Auctions"
+          value={stats?.active_auctions?.toLocaleString()}
+          change="-2.4%"
+          trend="down"
+          icon={Hammer}
+          color="orange"
+        />
+      </div>
+
+      {/* Charts Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Revenue chart - last 30 days */}
+        <Card className="p-6">
+          <h3 className="font-semibold text-gray-900 mb-4">Revenue (30 days)</h3>
+          <RevenueChart data={stats?.revenue_chart} />
+        </Card>
+
+        {/* Listings by category */}
+        <Card className="p-6">
+          <h3 className="font-semibold text-gray-900 mb-4">Listings by Category</h3>
+          <CategoryPieChart data={stats?.listings_by_category} />
+        </Card>
+      </div>
+
+      {/* Quick Actions + Recent Activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        {/* Pending approvals — most important */}
+        <Card className="p-6 col-span-2">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-gray-900">Pending Approvals</h3>
+            <Link to="/admin/listings?status=pending" className="text-primary text-sm">
+              View all →
+            </Link>
+          </div>
+          <PendingListingsTable />
+        </Card>
+
+        {/* Quick stats */}
+        <Card className="p-6">
+          <h3 className="font-semibold text-gray-900 mb-4">Today's Activity</h3>
+          <div className="space-y-4">
+            {[
+              { label: "New Users", value: stats?.new_users_today, icon: UserPlus, color: "text-blue-500" },
+              { label: "New Listings", value: stats?.new_listings_today, icon: Plus, color: "text-green-500" },
+              { label: "Bids Placed", value: stats?.bids_today, icon: Hammer, color: "text-orange-500" },
+              { label: "Revenue", value: formatCurrency(stats?.revenue_today), icon: DollarSign, color: "text-purple-500" },
+              { label: "Open Reports", value: stats?.open_reports, icon: Flag, color: "text-red-500" },
+            ].map(item => (
+              <div key={item.label} className="flex items-center gap-3">
+                <div className={`${item.color}`}>
+                  <item.icon className="w-4 h-4" />
+                </div>
+                <span className="text-gray-600 text-sm flex-1">{item.label}</span>
+                <span className="font-semibold text-gray-900">{item.value ?? "—"}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 2 — Listings Management
+
+```typescript
+// src/pages/listings/ListingsPage.tsx
+// Inspired by Saleor's product list page
+
+export function ListingsPage() {
+  const [status, setStatus] = useState("pending") // default: show pending first
+  const [search, setSearch] = useState("")
+  const [page, setPage] = useState(1)
+  const [selected, setSelected] = useState<string[]>([])
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin", "listings", status, search, page],
+    queryFn: () => api.get(`/admin/listings?status=${status}&q=${search}&page=${page}&per_page=25`)
+      .then(r => r.data),
+  })
+
+  // Bulk actions
+  const bulkApprove = useMutation({
+    mutationFn: (ids: string[]) => api.post("/admin/listings/bulk-approve", { ids }),
+    onSuccess: () => { queryClient.invalidateQueries(["admin", "listings"]); setSelected([]) }
+  })
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Listings</h1>
+          <p className="text-gray-500 text-sm">{data?.meta?.total?.toLocaleString()} total listings</p>
+        </div>
+        <Button onClick={() => exportCSV()}>
+          <Download className="w-4 h-4 mr-2" /> Export CSV
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <Card className="p-4">
+        <div className="flex flex-wrap gap-3">
+          {/* Status tabs */}
+          <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+            {["pending", "active", "sold", "expired", "rejected"].map(s => (
+              <button
+                key={s}
+                onClick={() => setStatus(s)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium capitalize transition-colors ${
+                  status === s ? "bg-white shadow text-gray-900" : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {s}
+                {s === "pending" && data?.pending_count > 0 && (
+                  <span className="ml-1.5 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">
+                    {data.pending_count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* Search */}
+          <div className="flex-1 min-w-48">
+            <Input
+              placeholder="Search listings..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              prefix={<Search className="w-4 h-4 text-gray-400" />}
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* Bulk actions bar */}
+      {selected.length > 0 && (
+        <div className="bg-primary/10 border border-primary/20 rounded-lg p-3 flex items-center gap-3">
+          <span className="text-primary text-sm font-medium">{selected.length} selected</span>
+          <Button size="sm" onClick={() => bulkApprove.mutate(selected)}>
+            <CheckCircle className="w-3 h-3 mr-1" /> Approve All
+          </Button>
+          <Button size="sm" variant="destructive" onClick={() => bulkReject(selected)}>
+            <XCircle className="w-3 h-3 mr-1" /> Reject All
+          </Button>
+          <button onClick={() => setSelected([])} className="text-gray-500 text-sm ml-auto">
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* Table */}
+      <Card>
+        <table className="w-full">
+          <thead className="border-b">
+            <tr>
+              <th className="p-4 w-10">
+                <input type="checkbox"
+                  onChange={e => setSelected(e.target.checked ? data?.data?.map((l:any) => l.id) : [])}
+                />
+              </th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Listing</th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Seller</th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Category</th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Price</th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Type</th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Location</th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Date</th>
+              <th className="p-4 text-left text-sm font-medium text-gray-500">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data?.data?.map((listing: any) => (
+              <tr key={listing.id} className="border-b hover:bg-gray-50 transition-colors">
+                <td className="p-4">
+                  <input type="checkbox"
+                    checked={selected.includes(listing.id)}
+                    onChange={e => {
+                      if (e.target.checked) setSelected([...selected, listing.id])
+                      else setSelected(selected.filter(id => id !== listing.id))
+                    }}
+                  />
+                </td>
+                <td className="p-4">
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={listing.images?.[0]?.url || `https://picsum.photos/40?random=${listing.id}`}
+                      className="w-10 h-10 rounded-lg object-cover"
+                    />
+                    <div>
+                      <p className="text-sm font-medium text-gray-900 line-clamp-1">{listing.title}</p>
+                      <p className="text-xs text-gray-400">#{listing.id.slice(0, 8)}</p>
+                    </div>
+                  </div>
+                </td>
+                <td className="p-4 text-sm text-gray-600">{listing.user?.name}</td>
+                <td className="p-4 text-sm text-gray-600">{listing.category?.name_en}</td>
+                <td className="p-4 text-sm font-medium">
+                  {listing.price ? `${listing.currency} ${Number(listing.price).toLocaleString()}` : "—"}
+                </td>
+                <td className="p-4">
+                  <Badge variant={listing.type === "auction" ? "destructive" : "default"} className="text-xs">
+                    {listing.type}
+                  </Badge>
+                </td>
+                <td className="p-4 text-sm text-gray-500">{listing.city}, {listing.country}</td>
+                <td className="p-4 text-xs text-gray-400">
+                  {format(new Date(listing.created_at), "MMM d, yyyy")}
+                </td>
+                <td className="p-4">
+                  <div className="flex gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => window.open(`/listings/${listing.id}`)}>
+                      <Eye className="w-3 h-3" />
+                    </Button>
+                    {listing.status === "pending" && (
+                      <>
+                        <Button size="sm" className="bg-green-500 hover:bg-green-600 h-7 px-2"
+                          onClick={() => approveListing(listing.id)}>
+                          <Check className="w-3 h-3" />
+                        </Button>
+                        <Button size="sm" variant="destructive" className="h-7 px-2"
+                          onClick={() => rejectListing(listing.id)}>
+                          <X className="w-3 h-3" />
+                        </Button>
+                      </>
+                    )}
+                    <Button size="sm" variant="ghost" className="text-blue-500 h-7 px-2"
+                      onClick={() => featureListing(listing.id)}>
+                      <Star className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div className="p-4 border-t">
+          <Pagination meta={data?.meta} onChange={setPage} />
+        </div>
+      </Card>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 3 — Users Management
+
+```typescript
+// src/pages/users/UsersPage.tsx
+
+export function UsersPage() {
+  const [filter, setFilter] = useState({ search: "", is_blocked: "", role: "" })
+
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold">Users</h1>
+
+      {/* Stats cards */}
+      <div className="grid grid-cols-4 gap-4">
+        <MiniCard title="Total Users" value={stats?.total} icon={Users} />
+        <MiniCard title="New Today" value={stats?.new_today} icon={UserPlus} color="green" />
+        <MiniCard title="Verified" value={stats?.verified} icon={BadgeCheck} color="blue" />
+        <MiniCard title="Blocked" value={stats?.blocked} icon={Ban} color="red" />
+      </div>
+
+      {/* Table with full user management */}
+      <Card>
+        <table className="w-full">
+          <thead>...</thead>
+          <tbody>
+            {users?.map(user => (
+              <tr key={user.id}>
+                <td>{/* Avatar + name + email */}</td>
+                <td>{/* User group badge */}</td>
+                <td>{/* Listings count */}</td>
+                <td>{/* Rating stars */}</td>
+                <td>{/* Member since */}</td>
+                <td>{/* Status: active/blocked */}</td>
+                <td>
+                  {/* Actions: View, Login as user, Block/Unblock, Change Group */}
+                  <DropdownMenu>
+                    <DropdownMenuItem onClick={() => viewUser(user.id)}>View Profile</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => blockUser(user.id)}>
+                      {user.is_blocked ? "Unblock" : "Block"} User
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => changeGroup(user.id)}>Change Group</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => manualCredit(user.id)}>Add Credit</DropdownMenuItem>
+                  </DropdownMenu>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 4 — Reports Queue
+
+```typescript
+// src/pages/reports/ReportsPage.tsx
+// Like a support ticket system
+
+export function ReportsPage() {
+  const [status, setStatus] = useState("pending")
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Reports Queue</h1>
+        {pendingCount > 0 && (
+          <span className="bg-red-500 text-white text-sm px-3 py-1 rounded-full font-medium">
+            {pendingCount} pending
+          </span>
+        )}
+      </div>
+
+      <Card>
+        {reports?.map(report => (
+          <div key={report.id} className="p-4 border-b flex gap-4">
+            {/* Report type icon */}
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+              report.type === "listing" ? "bg-orange-100" : "bg-red-100"
+            }`}>
+              {report.type === "listing" ? <Tag className="w-5 h-5 text-orange-500" /> : <User className="w-5 h-5 text-red-500" />}
+            </div>
+
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-medium text-sm">{report.reason}</span>
+                <Badge variant="outline" className="text-xs">{report.type}</Badge>
+              </div>
+              <p className="text-gray-500 text-sm">{report.description}</p>
+              <p className="text-gray-400 text-xs mt-1">
+                Reported by {report.reporter?.name} • {format(new Date(report.created_at), "MMM d")}
+              </p>
+            </div>
+
+            <div className="flex gap-2 shrink-0">
+              <Button size="sm" variant="outline" onClick={() => viewReported(report)}>
+                View {report.type}
+              </Button>
+              <Button size="sm" className="bg-green-500 hover:bg-green-600"
+                onClick={() => resolveReport(report.id)}>
+                Resolve
+              </Button>
+              <Button size="sm" variant="destructive"
+                onClick={() => takeAction(report)}>
+                Take Action
+              </Button>
+            </div>
+          </div>
+        ))}
+      </Card>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 5 — Auctions Monitor
+
+```typescript
+// src/pages/auctions/AuctionsPage.tsx
+// Real-time monitoring of live auctions
+
+export function AuctionsPage() {
+  const { data: auctions } = useQuery({
+    queryKey: ["admin", "auctions"],
+    queryFn: () => api.get("/admin/auctions?status=active").then(r => r.data.data),
+    refetchInterval: 10000, // live refresh every 10s
+  })
+
+  return (
+    <div className="space-y-4">
+      <h1 className="text-2xl font-bold">Auctions Monitor</h1>
+
+      {/* Live auctions grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {auctions?.map(auction => (
+          <Card key={auction.id} className="p-4">
+            <div className="flex justify-between items-start mb-3">
+              <div>
+                <p className="font-medium text-sm">{auction.listing?.title}</p>
+                <p className="text-gray-500 text-xs">By {auction.seller?.name}</p>
+              </div>
+              <CountdownBadge endsAt={auction.ends_at} />
+            </div>
+
+            {/* Bid progress */}
+            <div className="flex items-center justify-between bg-gray-50 rounded-lg p-3">
+              <div>
+                <p className="text-xs text-gray-500">Current Bid</p>
+                <p className="text-xl font-bold text-primary">
+                  {auction.currency} {Number(auction.current_bid).toLocaleString()}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-gray-500">Total Bids</p>
+                <p className="text-xl font-bold">{auction.bid_count}</p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 mt-3">
+              <Button size="sm" variant="outline" className="flex-1"
+                onClick={() => viewBidHistory(auction.id)}>
+                Bid History
+              </Button>
+              <Button size="sm" variant="destructive"
+                onClick={() => cancelAuction(auction.id)}>
+                Cancel
+              </Button>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 6 — Payments & Revenue
+
+```typescript
+// src/pages/payments/PaymentsPage.tsx
+
+export function PaymentsPage() {
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Payments & Revenue</h1>
+
+      {/* Revenue summary */}
+      <div className="grid grid-cols-3 gap-4">
+        <Card className="p-5">
+          <p className="text-gray-500 text-sm">Total Revenue</p>
+          <p className="text-3xl font-bold text-primary mt-1">{formatCurrency(stats?.total)}</p>
+          <p className="text-green-500 text-xs mt-1">+{stats?.growth}% this month</p>
+        </Card>
+        <Card className="p-5">
+          <p className="text-gray-500 text-sm">Featured Listings</p>
+          <p className="text-3xl font-bold mt-1">{formatCurrency(stats?.featured_revenue)}</p>
+        </Card>
+        <Card className="p-5">
+          <p className="text-gray-500 text-sm">Subscriptions</p>
+          <p className="text-3xl font-bold mt-1">{formatCurrency(stats?.subscription_revenue)}</p>
+        </Card>
+      </div>
+
+      {/* Revenue chart */}
+      <Card className="p-6">
+        <h3 className="font-semibold mb-4">Revenue Over Time</h3>
+        <RevenueChart />
+      </Card>
+
+      {/* Transactions table */}
+      <Card>
+        <div className="p-4 border-b">
+          <h3 className="font-semibold">Recent Transactions</h3>
+        </div>
+        <table className="w-full">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="p-3 text-left text-xs font-medium text-gray-500">User</th>
+              <th className="p-3 text-left text-xs font-medium text-gray-500">Type</th>
+              <th className="p-3 text-left text-xs font-medium text-gray-500">Amount</th>
+              <th className="p-3 text-left text-xs font-medium text-gray-500">Status</th>
+              <th className="p-3 text-left text-xs font-medium text-gray-500">Date</th>
+              <th className="p-3 text-left text-xs font-medium text-gray-500">Ref</th>
+            </tr>
+          </thead>
+          <tbody>
+            {payments?.map(p => (
+              <tr key={p.id} className="border-b hover:bg-gray-50">
+                <td className="p-3 text-sm">{p.user?.name}</td>
+                <td className="p-3">
+                  <Badge variant="outline" className="text-xs">{p.type}</Badge>
+                </td>
+                <td className="p-3 text-sm font-medium">
+                  {p.currency} {Number(p.amount).toLocaleString()}
+                </td>
+                <td className="p-3">
+                  <StatusBadge status={p.status} />
+                </td>
+                <td className="p-3 text-xs text-gray-400">
+                  {format(new Date(p.created_at), "MMM d, HH:mm")}
+                </td>
+                <td className="p-3 text-xs text-gray-400 font-mono">
+                  {p.provider_payment_id?.slice(0, 14)}...
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 7 — Categories + Custom Fields
+
+```typescript
+// Two-panel layout: categories list on left, fields on right
+
+export function CategoriesPage() {
+  const [selectedCat, setSelectedCat] = useState(null)
+
+  return (
+    <div className="grid grid-cols-3 gap-6">
+      {/* Left: Category tree */}
+      <Card className="p-4 col-span-1">
+        <h3 className="font-semibold mb-3">Categories</h3>
+        {categories?.map(cat => (
+          <button key={cat.id}
+            onClick={() => setSelectedCat(cat)}
+            className={`w-full text-left p-3 rounded-lg mb-1 flex items-center gap-2 ${
+              selectedCat?.id === cat.id ? "bg-primary text-white" : "hover:bg-gray-50"
+            }`}
+          >
+            <span>{cat.icon}</span>
+            <div className="flex-1">
+              <p className="text-sm font-medium">{cat.name_en}</p>
+              <p className="text-xs opacity-60">{cat.name_ar}</p>
+            </div>
+            <ChevronRight className="w-4 h-4 opacity-40" />
+          </button>
+        ))}
+      </Card>
+
+      {/* Right: Custom fields for selected category */}
+      <Card className="p-4 col-span-2">
+        {selectedCat ? (
+          <>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold">
+                {selectedCat.icon} {selectedCat.name_en} — Custom Fields
+              </h3>
+              <Button size="sm" onClick={() => setAddFieldOpen(true)}>
+                <Plus className="w-4 h-4 mr-1" /> Add Field
+              </Button>
+            </div>
+            <FieldsManager categoryId={selectedCat.id} />
+          </>
+        ) : (
+          <div className="h-full flex items-center justify-center text-gray-400">
+            Select a category to manage its fields
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 8 — Price Plans & User Groups
+
+```typescript
+// src/pages/pricing/PricingPage.tsx
+// Saleor-inspired plan management
+
+export function PricingPage() {
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Price Plans</h1>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {plans?.map(plan => (
+          <Card key={plan.id} className={`p-5 ${plan.is_featured ? "border-primary border-2" : ""}`}>
+            {plan.is_featured && (
+              <span className="bg-primary text-white text-xs px-2 py-0.5 rounded mb-3 inline-block">
+                Most Popular
+              </span>
+            )}
+            <h3 className="font-bold text-lg">{plan.name}</h3>
+            <p className="text-3xl font-bold mt-2">
+              {plan.type === "free" ? "Free" : `$${plan.subscription_price}`}
+              {plan.type === "subscription" && <span className="text-sm text-gray-400">/mo</span>}
+            </p>
+            <div className="mt-4 space-y-2">
+              <Feature label={`${plan.max_listings === -1 ? "Unlimited" : plan.max_listings} listings`} />
+              <Feature label={`${plan.max_images_per_listing} images per listing`} />
+              <Feature label="Standard auctions" />
+              {plan.dutch_auction_allowed && <Feature label="Dutch auctions" />}
+              <Feature label={`Featured: $${plan.featured_fee_7d}/7d, $${plan.featured_fee_30d}/30d`} />
+              {plan.final_value_fee_percent > 0 && (
+                <Feature label={`${plan.final_value_fee_percent}% final value fee`} warning />
+              )}
+            </div>
+            <Button variant="outline" className="w-full mt-4" onClick={() => editPlan(plan)}>
+              Edit Plan
+            </Button>
+          </Card>
+        ))}
+        <Card className="p-5 border-dashed border-2 flex items-center justify-center cursor-pointer hover:bg-gray-50"
+          onClick={() => setCreateOpen(true)}>
+          <div className="text-center">
+            <Plus className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+            <p className="text-gray-400 text-sm">Create Plan</p>
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
+```
+
+---
+
+## Page 9 — Site Settings
+
+```typescript
+// src/pages/settings/SettingsPage.tsx
+
+export function SettingsPage() {
+  return (
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold">Site Settings</h1>
+
+      <Tabs defaultValue="general">
+        <TabsList>
+          <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="listings">Listings</TabsTrigger>
+          <TabsTrigger value="auctions">Auctions</TabsTrigger>
+          <TabsTrigger value="emails">Email Templates</TabsTrigger>
+          <TabsTrigger value="payments">Payments</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="general">
+          <Card className="p-6 space-y-4">
+            <SettingRow label="Site Name" description="Displayed in browser tab and emails">
+              <Input defaultValue="GeoCore" />
+            </SettingRow>
+            <SettingRow label="Site On/Off" description="Temporarily disable the site">
+              <Switch />
+            </SettingRow>
+            <SettingRow label="Default Currency" description="Used for new listings">
+              <Select defaultValue="USD">...</Select>
+            </SettingRow>
+            <SettingRow label="Require Listing Approval" description="New listings need admin approval">
+              <Switch />
+            </SettingRow>
+            <SettingRow label="Anonymous Listings" description="Allow posting without registration">
+              <Switch />
+            </SettingRow>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="emails">
+          <Card className="p-6">
+            <p className="text-gray-500 text-sm mb-4">
+              Customize email templates sent to users
+            </p>
+            {emailTemplates?.map(template => (
+              <div key={template.id} className="border rounded-lg p-4 mb-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium">{template.name}</p>
+                    <p className="text-gray-500 text-sm">{template.description}</p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => editTemplate(template)}>
+                    Edit Template
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+```
+
+---
+
+## Additional Tasks
+
+### TASK-116: Final Value Fee Backend
+
+```go
+// In auctions/handler.go — when auction ends:
+// If seller's price plan has final_value_fee_percent > 0:
+// fee = current_bid * (fee_percent / 100)
+// Deduct from seller's balance OR create an invoice
+
+// Called by the auction end cron job
+func (h *Handler) EndAuction(auction *Auction) error {
+    // ...existing end logic...
+    
+    // Calculate final value fee
+    if auction.CurrentBid > 0 {
+        var plan pricing.PricePlan
+        h.db.Joins("JOIN users ON users.user_group_id = price_plans.user_group_id").
+            Where("users.id = ?", auction.SellerID).
+            First(&plan)
+        
+        if plan.FinalValueFeePercent > 0 {
+            fee := auction.CurrentBid * (plan.FinalValueFeePercent / 100)
+            wallet.Debit(h.db, auction.SellerID, fee, "final_value_fee",
+                auction.ID.String(), 
+                fmt.Sprintf("Final value fee (%.1f%%)", plan.FinalValueFeePercent),
+                auction.Currency)
+        }
+    }
+}
+```
+
+### TASK-117: RSS Feeds
+
+```go
+// GET /feeds/listings.rss
+// GET /feeds/auctions.rss
+
+func (h *Handler) ListingsRSS(c *gin.Context) {
+    var listings []Listing
+    h.db.Where("status = ?", "active").
+        Order("created_at DESC").
+        Limit(50).
+        Find(&listings)
+
+    c.Header("Content-Type", "application/rss+xml")
+    c.Writer.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+    c.Writer.WriteString(`<rss version="2.0">`)
+    c.Writer.WriteString(`<channel>`)
+    c.Writer.WriteString(fmt.Sprintf("<title>GeoCore Listings</title>"))
+    c.Writer.WriteString(fmt.Sprintf("<link>%s</link>", os.Getenv("FRONTEND_URL")))
+
+    for _, l := range listings {
+        price := ""
+        if l.Price != nil { price = fmt.Sprintf("%.2f %s", *l.Price, l.Currency) }
+        c.Writer.WriteString(fmt.Sprintf(`
+            <item>
+                <title><![CDATA[%s]]></title>
+                <link>%s/listings/%s</link>
+                <description><![CDATA[%s — %s — %s, %s]]></description>
+                <pubDate>%s</pubDate>
+                <guid>%s</guid>
+            </item>`,
+            l.Title,
+            os.Getenv("FRONTEND_URL"), l.ID,
+            l.Description, price, l.City, l.Country,
+            l.CreatedAt.Format(time.RFC1123Z),
+            l.ID,
+        ))
+    }
+    c.Writer.WriteString(`</channel></rss>`)
+}
+```
+
+---
+
+## Build & Deploy
+
+```bash
+cd frontend-admin
+npm run build
+# Output: dist/
+
+# Push to GitHub
+git add .
+git commit -m "feat(admin): complete admin dashboard — Saleor-inspired UX
+- Dashboard with KPI cards + revenue charts
+- Listings management with bulk approve/reject
+- Real-time auctions monitor
+- Users + user groups management
+- Reports queue
+- Payments & revenue analytics
+- Categories + custom fields manager
+- Price plans management
+- Site settings"
+git push origin main
+```
+
+---
+
+## Final Report
+
+```
+═══════════════════════════════════════
+GEOCORE ADMIN DASHBOARD — BUILD REPORT
+═══════════════════════════════════════
+
+Pages Built:
+✅ Dashboard (KPIs + charts + activity)
+✅ Listings (table + bulk approve/reject + export)
+✅ Auctions (live monitor + bid history)
+✅ Users (management + block + group change)
+✅ Reports Queue
+✅ Payments & Revenue
+✅ Categories + Custom Fields
+✅ Price Plans
+✅ Storefronts
+✅ Site Settings (tabs: general/listings/emails)
+
+Backend Tasks:
+✅ TASK-116: Final Value Fee
+✅ TASK-117: RSS Feeds (/feeds/listings.rss)
+
+Build: npm run build — PASS / FAIL
+GitHub: pushed to /frontend-admin
+
+URL: https://geo-core-next.replit.app/admin
+═══════════════════════════════════════
+```

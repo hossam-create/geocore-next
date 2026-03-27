@@ -1,0 +1,81 @@
+## GeoCore Next — Render Blueprint
+## One-click deploy:
+## https://render.com/deploy?repo=https://github.com/hossam-create/Mnbara-Platform
+
+services:
+  # ── Go API + serves built frontend static files ────────────────────────────
+  - type: web
+    name: geocore-api
+    runtime: go
+    region: oregon
+    plan: starter
+    rootDir: geocore-next
+    buildCommand: bash render-build.sh
+    startCommand: ./server
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: GIN_MODE
+        value: release
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        fromDatabase:
+          name: geocore-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: geocore-redis
+          type: redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      # Set these in Render Dashboard → geocore-api → Environment
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: APPLE_CLIENT_ID
+        sync: false
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  - type: pserv
+    name: geocore-db
+    runtime: postgresql
+    region: oregon
+    plan: starter
+    databases:
+      - name: geocoredb
+        user: geocore
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  - type: redis
+    name: geocore-redis
+    region: oregon
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
