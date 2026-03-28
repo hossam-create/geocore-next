@@ -3,7 +3,7 @@ services:
     name: geocore-api
     env: go
     region: oregon
-    plan: starter
+    plan: free
     rootDir: geocore-next
     buildCommand: bash render-build.sh
     startCommand: ./server
@@ -60,7 +60,7 @@ services:
   - type: redis
     name: geocore-redis
     region: oregon
-    plan: starter
+    plan: free
     maxmemoryPolicy: allkeys-lru
     ipAllowList: []
 
@@ -69,5 +69,5 @@ databases:
     databaseName: geocoredb
     user: geocore
     region: oregon
-    plan: starter
+    plan: free
     ipAllowList: []
