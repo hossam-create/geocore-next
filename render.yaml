@@ -1,9 +1,4 @@
-## GeoCore Next — Render Blueprint
-## One-click deploy:
-## https://render.com/deploy?repo=https://github.com/hossam-create/geocore-next
-
 services:
-  # ── Go API + serves built frontend static files ────────────────────────────
   - type: web
     name: geocore-api
     env: go
@@ -62,17 +57,17 @@ services:
       - key: APPLE_CLIENT_ID
         sync: false
 
-  # ── Redis ──────────────────────────────────────────────────────────────────
   - type: redis
     name: geocore-redis
     region: oregon
     plan: starter
     maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
 
-# ── PostgreSQL (must be top-level, not under services) ─────────────────────
 databases:
   - name: geocore-db
     databaseName: geocoredb
     user: geocore
     region: oregon
     plan: starter
+    ipAllowList: []
