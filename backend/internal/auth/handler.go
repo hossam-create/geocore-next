@@ -8,6 +8,7 @@ import (
 	"github.com/geocore-next/backend/pkg/email"
 	"github.com/geocore-next/backend/pkg/middleware"
 	"github.com/geocore-next/backend/pkg/response"
+	pkgvalidator "github.com/geocore-next/backend/pkg/validator"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -28,7 +29,7 @@ func NewHandler(db *gorm.DB, rdb *redis.Client) *Handler {
 type RegisterReq struct {
 	Name     string `json:"name"     binding:"required,min=2,max=100"`
 	Email    string `json:"email"    binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8"`
+	Password string `json:"password" binding:"required,min=10,max=72"`
 	Phone    string `json:"phone"`
 }
 
@@ -44,6 +45,12 @@ func (h *Handler) Register(c *gin.Context) {
 	var req RegisterReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
+		return
+	}
+
+	// Validate password strength
+	if !pkgvalidator.PasswordStrength(req.Password) {
+		response.BadRequest(c, "Password must be at least 10 characters with uppercase, lowercase, digit, and special character")
 		return
 	}
 

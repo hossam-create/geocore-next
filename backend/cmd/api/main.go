@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -43,10 +44,35 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
+func validateEnv() error {
+	// JWT_SECRET is critical for authentication
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		return errors.New("JWT_SECRET environment variable is required")
+	}
+	if len(jwtSecret) < 32 {
+		return errors.New("JWT_SECRET must be at least 32 characters for security")
+	}
+
+	// Warn if using placeholder values in production
+	if os.Getenv("APP_ENV") == "production" {
+		if jwtSecret == "change_this_to_a_secure_random_string_min_32_chars" {
+			return errors.New("JWT_SECRET must not use placeholder value in production")
+		}
+	}
+
+	return nil
+}
+
 func main() {
 	_ = godotenv.Load()
 	logger, _ := zap.NewProduction()
 	defer logger.Sync()
+
+	// Validate critical environment variables
+	if err := validateEnv(); err != nil {
+		logger.Fatal("Environment validation failed", zap.Error(err))
+	}
 
 	db, err := database.Connect()
 	if err != nil {
@@ -76,6 +102,10 @@ func main() {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
+
+	// Security headers
+	r.Use(middleware.SecurityHeaders())
+
 	corsConfig := cors.Config{
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders: []string{"Origin", "Content-Type", "Authorization"},
