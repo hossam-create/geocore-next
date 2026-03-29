@@ -5,13 +5,15 @@ import api from "@/lib/api";
 import { formatPrice, formatRelativeTime } from "@/lib/utils";
 import { CountdownTimer } from "@/components/ui/CountdownTimer";
 import { useAuthStore } from "@/store/auth";
-import { ChevronLeft, Trophy, Users, Zap, TrendingUp } from "lucide-react";
+import { ChevronLeft, Trophy, Users, Zap, TrendingUp, ShoppingCart, Clock, AlertTriangle } from "lucide-react";
 import type { Auction, AuctionBid, ApiError } from "@/lib/types";
 
 interface LiveBid {
   bid: number;
   user: string;
   ts: number;
+  extended?: boolean;
+  ends_at?: string;
 }
 
 interface FeedBid {
@@ -21,6 +23,14 @@ interface FeedBid {
   user_id: string;
   isLive: boolean;
 }
+
+// Auction type labels
+const AUCTION_TYPE_LABELS: Record<string, { label: string; color: string; description: string }> = {
+  standard: { label: "Standard", color: "bg-blue-500", description: "Highest bid wins" },
+  dutch: { label: "Dutch", color: "bg-orange-500", description: "Price drops over time - first bid wins!" },
+  reverse: { label: "Reverse", color: "bg-purple-500", description: "Lowest bid wins" },
+  sealed: { label: "Sealed", color: "bg-gray-500", description: "Hidden bids until end" },
+};
 
 export default function AuctionDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,6 +43,8 @@ export default function AuctionDetailPage() {
   const [bidAmount, setBidAmount] = useState("");
   const [bidMsg, setBidMsg] = useState("");
   const [wsConnected, setWsConnected] = useState(false);
+  const [auctionExtended, setAuctionExtended] = useState(false);
+  const [currentEndsAt, setCurrentEndsAt] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const { data: auction, isLoading, isError } = useQuery<Auction>({
@@ -46,6 +58,7 @@ export default function AuctionDetailPage() {
     if (auction) {
       setCurrentBid((prev) => prev ?? auction.current_bid);
       setBidCount((prev) => prev ?? auction.bid_count);
+      setCurrentEndsAt(auction.ends_at);
     }
   }, [auction]);
 
@@ -71,11 +84,26 @@ export default function AuctionDetailPage() {
 
       ws.onmessage = (e) => {
         try {
-          const msg = JSON.parse(e.data) as { bid: number; user: string };
+          const msg = JSON.parse(e.data) as { bid: number; user: string; extended?: boolean; ends_at?: string; event?: string };
+          
+          // Handle Buy Now event
+          if (msg.event === "buy_now") {
+            setBidMsg("Item sold via Buy Now!");
+            return;
+          }
+          
           setCurrentBid(msg.bid);
           setBidCount((prev) => (prev ?? 0) + 1);
+          
+          // Handle Anti-Sniping extension
+          if (msg.extended && msg.ends_at) {
+            setAuctionExtended(true);
+            setCurrentEndsAt(msg.ends_at);
+            setTimeout(() => setAuctionExtended(false), 5000);
+          }
+          
           setLiveFeed((prev) => [
-            { bid: msg.bid, user: msg.user, ts: Date.now() },
+            { bid: msg.bid, user: msg.user, ts: Date.now(), extended: msg.extended, ends_at: msg.ends_at },
             ...prev.slice(0, 19),
           ]);
         } catch (err) {
@@ -110,13 +138,33 @@ export default function AuctionDetailPage() {
   const bidMutation = useMutation({
     mutationFn: (amount: number) =>
       api.post(`/auctions/${id}/bid`, { amount }).then((r) => r.data),
-    onSuccess: (data: { data?: { amount?: number } }) => {
+    onSuccess: (data: { data?: { amount?: number; extended?: boolean; new_end_time?: string } }) => {
       setBidMsg("Bid placed successfully!");
       setBidAmount("");
       setCurrentBid(data.data?.amount ?? Number(bidAmount));
+      if (data.data?.extended && data.data?.new_end_time) {
+        setAuctionExtended(true);
+        setCurrentEndsAt(data.data.new_end_time);
+        setTimeout(() => setAuctionExtended(false), 5000);
+      }
     },
     onError: (err: ApiError) => {
       setBidMsg(err?.response?.data?.message ?? "Failed to place bid.");
+    },
+  });
+
+  // Buy Now mutation
+  const buyNowMutation = useMutation({
+    mutationFn: () => api.post(`/auctions/${id}/buy-now`).then((r) => r.data),
+    onSuccess: (data: { data?: { price?: number } }) => {
+      setBidMsg("Purchase successful! Redirecting to checkout...");
+      const price = data.data?.price ?? auction?.buy_now_price ?? 0;
+      setTimeout(() => {
+        navigate(`/checkout?auction_id=${id}&amount=${price}&currency=${auction?.currency ?? "AED"}`);
+      }, 1500);
+    },
+    onError: (err: ApiError) => {
+      setBidMsg(err?.response?.data?.message ?? "Failed to complete purchase.");
     },
   });
 
@@ -130,9 +178,6 @@ export default function AuctionDetailPage() {
       setBidMsg("Please enter a valid amount.");
       return;
     }
-    // Backend rule: bid must be strictly greater than current_bid;
-    // for first bid (current_bid === 0), the floor is start_price - 0.01
-    // so amount >= start_price is valid on the first bid.
     const activeBid = currentBid ?? auction?.current_bid ?? 0;
     const floor = activeBid > 0 ? activeBid : (auction?.start_price ?? 1) - 0.01;
     if (amount <= floor) {
@@ -142,6 +187,16 @@ export default function AuctionDetailPage() {
     }
     setBidMsg("");
     bidMutation.mutate(amount);
+  };
+
+  const handleBuyNow = () => {
+    if (!isAuthenticated) {
+      navigate("/login?next=/auctions/" + id);
+      return;
+    }
+    if (confirm(`Buy now for ${formatPrice(auction?.buy_now_price ?? 0, auction?.currency ?? "AED")}?`)) {
+      buyNowMutation.mutate();
+    }
   };
 
   if (isLoading) {
@@ -168,9 +223,14 @@ export default function AuctionDetailPage() {
   const displayBid = currentBid ?? auction.current_bid ?? auction.start_price ?? 0;
   const displayBidCount = bidCount ?? auction.bid_count ?? 0;
   const currency = auction.currency || "AED";
+  const auctionType = (auction as any).type || "standard";
+  const typeInfo = AUCTION_TYPE_LABELS[auctionType] || AUCTION_TYPE_LABELS.standard;
 
-  // Min next bid mirrors backend: must be strictly > current bid
-  // Show start_price as the floor when no bids have been placed yet
+  // For Dutch auctions, use current_price from API response
+  const dutchPrice = (auction as any).current_price ?? displayBid;
+  const isDutch = auctionType === "dutch";
+  const isReverse = auctionType === "reverse";
+
   const minNext = displayBid > 0 ? displayBid : auction.start_price;
 
   const liveFeedBids: FeedBid[] = liveFeed.map((f) => ({
@@ -249,27 +309,77 @@ export default function AuctionDetailPage() {
         </div>
 
         <div>
-          <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-1.5 inline-flex items-center gap-1.5 text-xs font-bold text-red-600 mb-3">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-            LIVE AUCTION
-          </div>
-
-          <h1 className="text-2xl font-bold text-gray-900 leading-snug mb-4">
-            {auction.title || auction.listing?.title || "Auction Item"}
-          </h1>
-
-          <div className="bg-[#0071CE] rounded-2xl p-5 text-white mb-5">
-            <p className="text-blue-200 text-sm">Current Bid</p>
-            <p className="text-4xl font-extrabold mt-1">{formatPrice(displayBid, currency)}</p>
-            <div className="flex items-center justify-between mt-3">
-              <p className="text-blue-200 text-xs flex items-center gap-1">
-                <Users size={12} /> {displayBidCount} bids placed
-              </p>
-              {auction.ends_at && (
-                <CountdownTimer endsAt={auction.ends_at} className="text-yellow-300" />
-              )}
+          {/* Auction Type Badge */}
+          <div className="flex items-center gap-2 mb-3">
+            <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-1.5 inline-flex items-center gap-1.5 text-xs font-bold text-red-600">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              LIVE AUCTION
+            </div>
+            <div className={`${typeInfo.color} text-white rounded-xl px-3 py-1.5 text-xs font-bold`}>
+              {typeInfo.label}
             </div>
           </div>
+
+          {/* Anti-Sniping Alert */}
+          {auctionExtended && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3 mb-4 flex items-center gap-2 animate-pulse">
+              <Clock size={16} className="text-yellow-600" />
+              <span className="text-sm font-semibold text-yellow-700">
+                ⏰ Auction extended! Anti-sniping protection activated.
+              </span>
+            </div>
+          )}
+
+          <h1 className="text-2xl font-bold text-gray-900 leading-snug mb-2">
+            {auction.title || auction.listing?.title || "Auction Item"}
+          </h1>
+          
+          {/* Auction Type Description */}
+          <p className="text-sm text-gray-500 mb-4">{typeInfo.description}</p>
+
+          {/* Dutch Auction Price Display */}
+          {isDutch ? (
+            <div className="bg-orange-500 rounded-2xl p-5 text-white mb-5">
+              <p className="text-orange-200 text-sm">Current Dutch Price (Dropping!)</p>
+              <p className="text-4xl font-extrabold mt-1">{formatPrice(dutchPrice, currency)}</p>
+              <p className="text-orange-200 text-xs mt-2">
+                💡 First person to bid at this price wins instantly!
+              </p>
+              <div className="flex items-center justify-between mt-3">
+                <p className="text-orange-200 text-xs flex items-center gap-1">
+                  <TrendingUp size={12} /> Price drops every few minutes
+                </p>
+                {(currentEndsAt || auction.ends_at) && (
+                  <CountdownTimer endsAt={currentEndsAt || auction.ends_at} className="text-yellow-300" />
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="bg-[#0071CE] rounded-2xl p-5 text-white mb-5">
+              <p className="text-blue-200 text-sm">{isReverse ? "Current Lowest Bid" : "Current Bid"}</p>
+              <p className="text-4xl font-extrabold mt-1">{formatPrice(displayBid, currency)}</p>
+              <div className="flex items-center justify-between mt-3">
+                <p className="text-blue-200 text-xs flex items-center gap-1">
+                  <Users size={12} /> {displayBidCount} bids placed
+                </p>
+                {(currentEndsAt || auction.ends_at) && (
+                  <CountdownTimer endsAt={currentEndsAt || auction.ends_at} className="text-yellow-300" />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Buy Now Button */}
+          {auction.buy_now_price && auction.status === "active" && !isDutch && (
+            <button
+              onClick={handleBuyNow}
+              disabled={buyNowMutation.isPending}
+              className="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-xl transition-colors disabled:opacity-60 flex items-center justify-center gap-2 mb-4"
+            >
+              <ShoppingCart size={16} />
+              {buyNowMutation.isPending ? "Processing..." : `Buy Now for ${formatPrice(auction.buy_now_price, currency)}`}
+            </button>
+          )}
 
           {auction.status === "active" ? (
             <div className="space-y-3">
