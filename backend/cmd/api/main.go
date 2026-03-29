@@ -1,5 +1,6 @@
 package main
 
+<<<<<<< HEAD
   import (
         "context"
         "fmt"
@@ -23,6 +24,27 @@ package main
         "github.com/geocore-next/backend/internal/users"
         "github.com/geocore-next/backend/pkg/database"
         "github.com/geocore-next/backend/pkg/middleware"
+=======
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/geocore-next/backend/internal/auctions"
+	"github.com/geocore-next/backend/internal/auth"
+	"github.com/geocore-next/backend/internal/chat"
+	"github.com/geocore-next/backend/internal/listings"
+	"github.com/geocore-next/backend/internal/payments"
+	"github.com/geocore-next/backend/internal/users"
+	"github.com/geocore-next/backend/pkg/cloudinary"
+	"github.com/geocore-next/backend/pkg/database"
+	"github.com/geocore-next/backend/pkg/middleware"
+	"github.com/geocore-next/backend/pkg/util"
+>>>>>>> 1aa1121 (TASK-001: Fix build errors - add missing imports, fix bool pointers, remove unused imports)
 
         "github.com/gin-contrib/cors"
         "github.com/gin-gonic/gin"
@@ -31,12 +53,16 @@ package main
         "go.uber.org/zap"
   )
 
+<<<<<<< HEAD
   func getenv(key, fallback string) string {
         if v := os.Getenv(key); v != "" {
                 return v
         }
         return fallback
   }
+=======
+
+>>>>>>> 1aa1121 (TASK-001: Fix build errors - add missing imports, fix bool pointers, remove unused imports)
 
   func main() {
         _ = godotenv.Load()
@@ -63,6 +89,7 @@ package main
         }
         logger.Info("Redis ready")
 
+<<<<<<< HEAD
         // AI Pricing client (non-fatal if service not running)
         aiClient := auctions.NewAIPricingClient()
         if aiClient.IsHealthy(ctx) {
@@ -70,12 +97,39 @@ package main
         } else {
                 logger.Warn("AI Pricing service not available — bid suggestions disabled")
         }
+=======
+	// ── Redis ─────────────────────────────────────────
+	rdbAddr := fmt.Sprintf("%s:%s", util.Getenv("REDIS_HOST", "localhost"), util.Getenv("REDIS_PORT", "6379"))
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     rdbAddr,
+		Password: os.Getenv("REDIS_PASSWORD"),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		logger.Fatal("Redis connect failed", zap.Error(err))
+	}
+	logger.Info("✅ Redis connected", zap.String("addr", rdbAddr))
+>>>>>>> 1aa1121 (TASK-001: Fix build errors - add missing imports, fix bool pointers, remove unused imports)
 
         middleware.RevocationRDB = rdb
 
+<<<<<<< HEAD
         if os.Getenv("APP_ENV") == "production" {
                 gin.SetMode(gin.ReleaseMode)
         }
+=======
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{util.Getenv("FRONTEND_URL", "http://localhost:3000")},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
+	r.Use(middleware.RateLimit(rdb, 100, time.Minute))
+>>>>>>> 1aa1121 (TASK-001: Fix build errors - add missing imports, fix bool pointers, remove unused imports)
 
         r := gin.New()
         r.Use(gin.Recovery())
@@ -118,6 +172,7 @@ package main
         go auctionHub.Run()
         go auctionHub.SubscribeRedis(context.Background())
 
+<<<<<<< HEAD
         v1 := r.Group("/api/v1")
         auth.RegisterRoutes(v1, db, rdb)
         users.RegisterRoutes(v1, db, rdb)
@@ -141,6 +196,37 @@ package main
         v1.POST("/media/upload-url", middleware.Auth(), func(c *gin.Context) {
                 images.NewHandler(db).GetUploadURL(c)
         })
+=======
+	// ── Cloudinary (optional) ──────────────────────────
+	cloud, _ := cloudinary.New()
+
+	// ── API Routes ────────────────────────────────────
+	v1 := r.Group("/api/v1")
+	auth.RegisterRoutes(v1, db, rdb)
+	users.RegisterRoutes(v1, db, rdb, cloud)
+	listings.RegisterRoutes(v1, db, rdb, cloud)
+	auctions.RegisterRoutes(v1, db, rdb)
+	chat.RegisterRoutes(v1, db, rdb)
+	payments.RegisterRoutes(v1, db, rdb)
+
+	// ── Cron: expire listings at midnight UTC ───────────
+	go listings.RunExpireCron(db)
+
+	// Auction WebSocket endpoint
+	r.GET("/ws/auctions/:id", func(c *gin.Context) {
+		auctions.ServeWS(auctionHub, c, db)
+	})
+
+	// ── HTTP Server ───────────────────────────────────
+	port := util.Getenv("PORT", "8080")
+	srv := &http.Server{
+		Addr:         ":" + port,
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+>>>>>>> 1aa1121 (TASK-001: Fix build errors - add missing imports, fix bool pointers, remove unused imports)
 
         // AI bid suggestion endpoint — proxies to Python microservice
         v1.POST("/auctions/ai-predict", middleware.Auth(), func(c *gin.Context) {

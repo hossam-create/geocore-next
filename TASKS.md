@@ -7,7 +7,7 @@
 ---
 
 ## TASK-001: Verify Go Build Passes
-**Epic:** Foundation | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** none | **Go Status:** Partial
+**Epic:** Foundation | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** none | **Go Status:** Done
 
 ### Description
 Run `go build ./...` and fix any import issues. The codebase has duplicate utility functions (`getenv` in `main.go` and `database.go`, `defaultStr` in `listings/handler.go` and `chat/handler.go`) that need consolidation.
@@ -16,10 +16,10 @@ Run `go build ./...` and fix any import issues. The codebase has duplicate utili
 Extract shared helpers to `pkg/util/util.go`. Check that all internal package imports resolve correctly. The `pkg/redis/redis.go` package is defined but unused in `main.go` — decide whether to use it or remove it.
 
 ### Acceptance Criteria
-- [ ] `go build ./...` completes with zero errors
-- [ ] `go vet ./...` has no warnings
-- [ ] Duplicate `getenv` and `defaultStr` functions consolidated into `pkg/util/`
-- [ ] `pkg/redis/redis.go` either used or removed
+- [x] `go build ./...` completes with zero errors
+- [x] `go vet ./...` has no warnings
+- [x] Duplicate `getenv` and `defaultStr` functions consolidated into `pkg/util/`
+- [x] `pkg/redis/redis.go` either used or removed
 
 ### Files
 - `backend/pkg/util/util.go` — create with shared helpers
