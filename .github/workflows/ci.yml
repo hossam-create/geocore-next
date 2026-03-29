@@ -2,25 +2,65 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
 jobs:
   backend:
+    name: Go Backend
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: geocore_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Download dependencies
+        run: cd backend && go mod download
+      - name: Run go vet
+        run: cd backend && go vet ./...
+      - name: Run tests
+        run: cd backend && go test ./... -v -cover
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/geocore_test?sslmode=disable
+      - name: Build
+        run: cd backend && go build -o /tmp/api ./cmd/api/main.go
+
+  frontend:
+    name: Next.js Frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: pnpm/action-setup@v2
         with:
-          go-version: "1.23"
-
-      - name: Vet
-        run: cd backend && go vet ./...
-
-      - name: Test
-        run: cd backend && go test ./...
-
+          version: 8
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install dependencies
+        run: cd frontend && pnpm install --frozen-lockfile
+      - name: TypeScript check
+        run: cd frontend && pnpm tsc --noEmit
+      - name: Lint
+        run: cd frontend && pnpm lint
       - name: Build
-        run: cd backend && go build -o /tmp/api ./cmd/api/main.go
+        run: cd frontend && pnpm build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8080/api
+          NEXT_PUBLIC_WS_URL: ws://localhost:8080/ws
