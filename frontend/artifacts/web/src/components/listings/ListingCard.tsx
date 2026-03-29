@@ -4,9 +4,10 @@ import { CountdownTimer } from "@/components/ui/CountdownTimer";
 import { formatPrice } from "@/lib/utils";
 import { getKeyAttributePills } from "@/lib/categoryFields";
 import { Heart, MapPin, ShoppingCart, Gavel } from "lucide-react";
+import type { Listing } from "@/types/listing";
 
 interface ListingCardProps {
-  listing: any;
+  listing: Listing;
   onFavorite?: (id: string) => void;
 }
 

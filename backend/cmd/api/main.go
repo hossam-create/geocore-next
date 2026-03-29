@@ -65,8 +65,13 @@ func validateEnv() error {
 }
 
 func main() {
-	_ = godotenv.Load()
-	logger, _ := zap.NewProduction()
+	if err := godotenv.Load(); err != nil {
+		// .env file not found is okay in production
+	}
+	logger, err := zap.NewProduction()
+	if err != nil {
+		panic("failed to initialize logger: " + err.Error())
+	}
 	defer logger.Sync()
 
 	// Validate critical environment variables
@@ -208,5 +213,7 @@ func main() {
 	logger.Info("Shutting down gracefully...")
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel2()
-	_ = srv.Shutdown(ctx2)
+	if err := srv.Shutdown(ctx2); err != nil {
+		logger.Error("Server shutdown error", zap.Error(err))
+	}
 }

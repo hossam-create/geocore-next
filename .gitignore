@@ -1,45 +1,76 @@
-node_modules/
-.next/
+# Environment files - NEVER commit secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Build outputs
+/backend/geocore-next
+/backend/main
+/frontend/.next
+/frontend/out
+/frontend/dist
+/mobile/dist
 dist/
 build/
 out/
 tmp/
 
-.env
-.env.local
-.env.*.local
+# Dependencies
+node_modules/
+vendor/
 
-*.log
-nohup.out
-
-.DS_Store
-Thumbs.db
+# IDE and editors
 .idea/
 .vscode/
+*.swp
+*.swo
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 
-coverage/
-.nyc_output/
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
 
-vendor/
-
-*.tsbuildinfo
-*.test.out
-__pycache__/
-*.pyc
-
-.expo/
-.expo-shared/
-
+# Logs
+*.log
+logs/
+nohup.out
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+npm-debug.log*
 
-*.exe
+# Test coverage
+coverage/
+.nyc_output/
+*.test.out
 *.out
 
+# TypeScript
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Mobile / Expo
+.expo/
+.expo-shared/
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Replit
 .replit.cache/
 .local/
+
+# Misc
+.specstory/

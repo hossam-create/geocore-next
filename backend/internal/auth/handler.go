@@ -17,15 +17,19 @@ import (
 	"gorm.io/gorm"
 )
 
+// Handler handles authentication-related HTTP requests.
+// It provides endpoints for user registration, login, and user info retrieval.
 type Handler struct {
 	db  *gorm.DB
 	rdb *redis.Client
 }
 
+// NewHandler creates a new authentication handler with the given database and Redis client.
 func NewHandler(db *gorm.DB, rdb *redis.Client) *Handler {
 	return &Handler{db, rdb}
 }
 
+// RegisterReq defines the request payload for user registration.
 type RegisterReq struct {
 	Name     string `json:"name"     binding:"required,min=2,max=100"`
 	Email    string `json:"email"    binding:"required,email"`
@@ -33,6 +37,7 @@ type RegisterReq struct {
 	Phone    string `json:"phone"`
 }
 
+// LoginReq defines the request payload for user login.
 type LoginReq struct {
 	Email    string `json:"email"    binding:"required,email"`
 	Password string `json:"password" binding:"required"`
@@ -99,7 +104,9 @@ func (h *Handler) Register(c *gin.Context) {
 	})
 }
 
-// Login — POST /api/v1/auth/login
+// Login authenticates a user with email and password.
+// POST /api/v1/auth/login
+// Returns a JWT token on successful authentication.
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -133,7 +140,8 @@ func (h *Handler) Login(c *gin.Context) {
 	response.OK(c, result)
 }
 
-// Me — GET /api/v1/auth/me (auth required)
+// Me retrieves the current authenticated user's profile.
+// GET /api/v1/auth/me (auth required)
 func (h *Handler) Me(c *gin.Context) {
 	userID := c.MustGet("user_id").(string)
 	var user users.User
@@ -144,6 +152,8 @@ func (h *Handler) Me(c *gin.Context) {
 	response.OK(c, user)
 }
 
+// generateToken creates a new JWT token for the given user.
+// The token expires after 30 days and contains the user ID and email.
 func generateToken(userID, email string) (string, error) {
 	claims := middleware.Claims{
 		UserID: userID,
