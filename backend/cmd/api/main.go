@@ -13,9 +13,11 @@ import (
 	"github.com/geocore-next/backend/internal/auctions"
 	"github.com/geocore-next/backend/internal/auth"
 	"github.com/geocore-next/backend/internal/chat"
+	"github.com/geocore-next/backend/internal/disputes"
 	"github.com/geocore-next/backend/internal/images"
 	"github.com/geocore-next/backend/internal/kyc"
 	"github.com/geocore-next/backend/internal/listings"
+	"github.com/geocore-next/backend/internal/loyalty"
 	"github.com/geocore-next/backend/internal/notifications"
 	"github.com/geocore-next/backend/internal/payments"
 	"github.com/geocore-next/backend/internal/reviews"
@@ -23,6 +25,8 @@ import (
 	"github.com/geocore-next/backend/internal/users"
 	"github.com/geocore-next/backend/internal/wallet"
 	"github.com/geocore-next/backend/pkg/database"
+	"github.com/geocore-next/backend/pkg/i18n"
+	"github.com/geocore-next/backend/pkg/jobs"
 	"github.com/geocore-next/backend/pkg/middleware"
 
 	"github.com/gin-contrib/cors"
@@ -85,9 +89,18 @@ func main() {
 	}
 	r.Use(cors.New(corsConfig))
 
+	// i18n middleware
+	r.Use(i18n.Middleware())
+
 	// Rate limiting
 	rl := middleware.NewRateLimiter(rdb)
 	r.Use(rl.Limit(100, time.Minute, "api"))
+
+	// Start background job queue
+	jobQueue := jobs.NewJobQueue(rdb)
+	jobs.RegisterDefaultHandlers(jobQueue, &jobs.HandlerDependencies{})
+	jobQueue.Start(4) // 4 workers
+	defer jobQueue.Stop()
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "time": time.Now()})
@@ -129,6 +142,8 @@ func main() {
 	reviews.RegisterRoutes(v1, db)
 	stores.RegisterRoutes(v1, db)
 	wallet.RegisterRoutes(v1, db)
+	disputes.RegisterRoutes(v1, db)
+	loyalty.RegisterRoutes(v1, db)
 
 	auctions.SetNotificationService(notifSvc)
 	chat.SetNotificationService(notifSvc)
