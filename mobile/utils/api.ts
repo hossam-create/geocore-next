@@ -96,6 +96,49 @@ export const notificationsAPI = {
     api.put("/notifications/preferences", prefs),
 };
 
+export const crowdshippingAPI = {
+  // Trips (traveler)
+  listTrips: (params?: {
+    status?: string;
+    origin_country?: string;
+    dest_country?: string;
+    mine?: boolean;
+  }) => api.get("/trips", { params }),
+  searchTrips: (params?: Record<string, string | number | undefined>) =>
+    api.get("/trips/search", { params }),
+  getTrip: (id: string) => api.get(`/trips/${id}`),
+  createTrip: (data: Record<string, unknown>) => api.post("/trips", data),
+  cancelTrip: (id: string) => api.delete(`/trips/${id}`),
+
+  // Delivery requests (buyer/shopper)
+  listDeliveryRequests: (params?: {
+    status?: string;
+    pickup_country?: string;
+    delivery_country?: string;
+    mine?: boolean;
+  }) => api.get("/delivery-requests", { params }),
+  getDeliveryRequest: (id: string) => api.get(`/delivery-requests/${id}`),
+  createDeliveryRequest: (data: Record<string, unknown>) =>
+    api.post("/delivery-requests", data),
+
+  // Matching
+  findTravelers: (id: string) =>
+    api.post(`/delivery-requests/${id}/find-travelers`),
+  matchRequest: (id: string, data?: Record<string, unknown>) =>
+    api.post(`/delivery-requests/${id}/match`, data ?? {}),
+  acceptMatch: (id: string, data?: Record<string, unknown>) =>
+    api.post(`/delivery-requests/${id}/accept`, data ?? {}),
+  rejectMatch: (id: string, data?: Record<string, unknown>) =>
+    api.post(`/delivery-requests/${id}/reject`, data ?? {}),
+  confirmDelivery: (id: string) =>
+    api.post(`/delivery-requests/${id}/confirm-delivery`),
+
+  // Corridors
+  listCorridors: () => api.get("/corridors"),
+  getCorridor: (origin: string, dest: string) =>
+    api.get(`/corridors/${origin}/${dest}`),
+};
+
 export const storesAPI = {
   list: () => api.get("/stores"),
   getBySlug: (slug: string) => api.get(`/stores/${slug}`),

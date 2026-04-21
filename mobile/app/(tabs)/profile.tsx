@@ -23,6 +23,7 @@ const MENU_ITEMS = [
   { id: "listings", label: "My Listings", icon: "list", route: "/my-listings" },
   { id: "favorites", label: "Favorites", icon: "heart", route: "/favorites" },
   { id: "bids", label: "My Bids", icon: "zap", route: "/my-bids" },
+  { id: "crowdshipping", label: "Crowdshipping", icon: "truck", route: "/crowdshipping" },
   { id: "balance", label: "Wallet & Payments", icon: "credit-card", route: "/wallet" },
   { id: "settings", label: "Settings", icon: "settings", route: "/settings" },
   { id: "help", label: "Help & Support", icon: "help-circle", route: "/help" },
