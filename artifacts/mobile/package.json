@@ -59,6 +59,7 @@
     "@nkzw/create-context-hook": "^1.1.0",
     "axios": "^1.13.6",
     "expo-secure-store": "^15.0.8",
+    "socket.io-client": "^4.8.1",
     "zustand": "^5.0.12"
   }
 }
