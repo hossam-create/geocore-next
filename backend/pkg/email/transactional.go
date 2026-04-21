@@ -143,3 +143,28 @@ func SendOutbidEmail(to, name, auctionTitle string, newAmount float64, currency 
 	}
 	return send(cfg, to, fmt.Sprintf("You've been outbid on: %s", auctionTitle), body)
 }
+
+// SendSupportContactEmail notifies support/admin inbox about a new contact form message.
+func SendSupportContactEmail(to, senderName, senderEmail, subject, message string) error {
+	cfg := loadSMTP()
+	if senderName == "" {
+		senderName = "Unknown"
+	}
+	if subject == "" {
+		subject = "General Inquiry"
+	}
+
+	body := fmt.Sprintf(
+		"New support contact message received:\n\n"+
+			"From: %s <%s>\n"+
+			"Subject: %s\n\n"+
+			"Message:\n%s\n",
+		senderName, senderEmail, subject, message,
+	)
+
+	if cfg.Host == "" || cfg.From == "" {
+		fmt.Printf("[email-dev] Support contact forwarded to %s from %s <%s>\n", to, senderName, senderEmail)
+		return nil
+	}
+	return send(cfg, to, fmt.Sprintf("[Support] %s", subject), body)
+}

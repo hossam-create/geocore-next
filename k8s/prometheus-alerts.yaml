@@ -1,0 +1,249 @@
+# ── Prometheus Alerting Rules ───────────────────────────────────────────────
+# P0 = Immediate page | P1 = Slack notification | P2 = Email digest
+
+groups:
+  # ── P0: CRITICAL — Immediate page ────────────────────────────────────────
+  - name: geocore-p0-critical
+    rules:
+      - alert: WalletInvariantViolation
+        expr: wallet_invariant_violation > 0
+        for: 0m
+        labels:
+          severity: critical
+          team: finance
+          page: "true"
+        annotations:
+          summary: "Wallet invariant violation detected"
+          description: "Wallet balance invariant violated. This means money is missing or created. IMMEDIATE investigation required."
+          runbook: "https://wiki.geocore.dev/runbooks/wallet-invariant"
+
+      - alert: EscrowUnreleasedTooLong
+        expr: |
+          (time() - escrow_created_timestamp) > 300
+          and escrow_status == "created"
+        for: 5m
+        labels:
+          severity: critical
+          team: finance
+          page: "true"
+        annotations:
+          summary: "Escrow unreleased for >5 minutes"
+          description: "Escrow has been in 'created' state for over 5 minutes. Buyer funds may be stuck."
+          runbook: "https://wiki.geocore.dev/runbooks/escrow-stuck"
+
+      - alert: PaymentWebhookFailureRate
+        expr: |
+          rate(http_requests_total{route=~"/webhooks/.*",status_code=~"5.."}[5m])
+          / rate(http_requests_total{route=~"/webhooks/.*"}[5m]) > 0.02
+        for: 2m
+        labels:
+          severity: critical
+          team: payments
+          page: "true"
+        annotations:
+          summary: "Payment webhook failure rate >2%"
+          description: "More than 2% of payment webhooks are failing. Revenue at risk."
+
+      - alert: KafkaConsumerLagCritical
+        expr: kafka_consumer_lag > 5000
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+          page: "true"
+        annotations:
+          summary: "Kafka consumer lag >5000"
+          description: "Consumer group is falling behind. Events are not being processed in time."
+
+      - alert: DBConnectionExhaustion
+        expr: db_connections_in_use / db_connections_open > 0.8
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+          page: "true"
+        annotations:
+          summary: "DB connection pool >80% in-use"
+          description: "Database connection pool is near exhaustion. In-use/open ratio exceeds 80%. Requests will start timing out."
+
+      - alert: DBPoolWaitQueueGrowing
+        expr: rate(db_connections_wait_count[5m]) > 10
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+          page: "true"
+        annotations:
+          summary: "DB connection wait queue growing"
+          description: "Requests are waiting for DB connections. Pool may be too small or queries are too slow."
+
+      - alert: DLQGrowing
+        expr: rate(dlq_size[10m]) > 0
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+          page: "true"
+        annotations:
+          summary: "Dead letter queue is growing"
+          description: "Events are failing and landing in DLQ. Manual intervention may be needed."
+
+  # ── P1: WARNING — Slack notification ──────────────────────────────────────
+  - name: geocore-p1-warning
+    rules:
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "p95 latency >800ms"
+          description: "API latency is degrading. Users may experience slow responses."
+
+      - alert: LowRedisHitRate
+        expr: |
+          rate(cache_hits_total[5m])
+          / (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m])) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Redis cache hit rate <80%"
+          description: "Cache effectiveness is dropping. DB load will increase."
+
+      - alert: HighErrorRate
+        expr: |
+          rate(http_requests_total{status_code=~"5.."}[5m])
+          / rate(http_requests_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Error rate >1%"
+          description: "More than 1% of requests are returning 5xx errors."
+
+      - alert: KafkaOutboxBacklog
+        expr: kafka_outbox_pending > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Kafka outbox backlog >100 events"
+          description: "Events are queuing up in the outbox table. Delivery may be delayed."
+
+      - alert: ReconcileMismatch
+        expr: rate(reconcile_mismatch[1h]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: finance
+        annotations:
+          summary: "Reconciliation mismatch detected"
+          description: "Financial reconciliation found a discrepancy. Investigation recommended."
+
+      - alert: SlowQueryRateHigh
+        expr: rate(db_query_duration_seconds_count{le="0.2"}[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Slow query rate elevated"
+          description: "More than 10 slow queries (>200ms) per second detected. DB performance degrading."
+
+      - alert: DegradedModeActive
+        expr: geocore_degraded_mode == 1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "System in degraded mode"
+          description: "Auto-degradation is active — read endpoints serving stale cache. DB may be slow or unreachable."
+
+      - alert: RedisMemoryPressure
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Redis memory usage >85% of maxmemory"
+          description: "Redis is approaching its memory limit. Keys will start being evicted soon. Review cache TTLs and increase maxmemory if needed."
+
+      - alert: RedisEvictionRate
+        expr: rate(redis_evicted_keys_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Redis evicting keys at >10/min"
+          description: "Redis is actively evicting keys due to memory pressure. Cache effectiveness is degrading — DB load will increase."
+
+      - alert: GoroutineLeak
+        expr: goroutine_count > 1000
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Goroutine count >1000"
+          description: "Possible goroutine leak detected. Check for unclosed channels, missing context cancellations, or hung HTTP connections."
+
+  # ── P2: INFO — Email digest ───────────────────────────────────────────────
+  - name: geocore-p2-info
+    rules:
+      - alert: HighCPU
+        expr: process_cpu_seconds > 0.7
+        for: 10m
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "CPU usage >70%"
+          description: "Service CPU usage is high. Consider scaling."
+
+      - alert: HighMemory
+        expr: process_resident_memory_bytes / 1024 / 1024 > 512
+        for: 10m
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "Memory usage >512MB"
+          description: "Service memory usage is elevated. Monitor for leaks."
+
+      - alert: KafkaEventsFailing
+        expr: rate(kafka_events_failed_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "Kafka events failing delivery"
+          description: "Some Kafka events are failing to deliver. Check DLQ for details."
+
+      - alert: RedisMaxMemoryNotSet
+        expr: redis_memory_max_bytes == 0
+        for: 1h
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "Redis maxmemory not set — eviction policy undefined"
+          description: "Redis has no maxmemory limit. Set maxmemory and maxmemory-policy=allkeys-lru to prevent OOM. Without this, Redis will use unbounded memory and eventually crash the node."
+
+      - alert: RedisHighClientCount
+        expr: redis_connected_clients > 200
+        for: 10m
+        labels:
+          severity: info
+          team: platform
+        annotations:
+          summary: "Redis connected clients >200"
+          description: "High number of Redis connections. Check for connection leaks or consider increasing PoolSize limits."

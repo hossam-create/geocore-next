@@ -1,0 +1,39 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: geocore
+  namespace: argocd
+  labels:
+    app: geocore
+  annotations:
+    notifications.argoproj.io/subscribe.on-deployed.slack: geocore-deploys
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: geocore-alerts
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/__ORG__/gitops-geocore
+    targetRevision: main
+    path: k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: geocore-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - ServerSideApply=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas

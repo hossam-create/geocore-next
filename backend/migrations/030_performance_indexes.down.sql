@@ -1,0 +1,12 @@
+DROP INDEX IF EXISTS idx_listings_status_cat;
+DROP INDEX IF EXISTS idx_listings_price_active;
+DROP INDEX IF EXISTS idx_listings_created_active;
+DROP INDEX IF EXISTS idx_listings_seller;
+DROP INDEX IF EXISTS idx_users_email;
+DROP INDEX IF EXISTS idx_users_created;
+DROP INDEX IF EXISTS idx_auctions_active;
+DROP INDEX IF EXISTS idx_auctions_seller;
+DROP INDEX IF EXISTS idx_orders_buyer;
+DROP INDEX IF EXISTS idx_orders_seller;
+DROP INDEX IF EXISTS idx_orders_status;
+DROP INDEX IF EXISTS idx_wallet_tx_wallet;

@@ -1,159 +1,170 @@
 package search
 
-  import (
-      "context"
-      "crypto/sha256"
-      "encoding/json"
-      "fmt"
-      "log/slog"
-      "net/http"
-      "os"
-      "strings"
-      "time"
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"strings"
+	"time"
 
-      "github.com/geocore-next/backend/pkg/response"
-      "github.com/gin-gonic/gin"
-      "github.com/google/uuid"
-      "gorm.io/gorm"
-  )
+	"github.com/geocore-next/backend/internal/security"
+	"github.com/geocore-next/backend/pkg/jobs"
+	"github.com/geocore-next/backend/pkg/response"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // Handler — semantic search using pgvector + OpenAI embeddings
-  // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// Handler — semantic search using pgvector + OpenAI embeddings
+// ════════════════════════════════════════════════════════════════════════════
 
-  type Handler struct {
-      db     *gorm.DB
-      openai *OpenAIClient
-  }
+type Handler struct {
+	db     *gorm.DB
+	openai *OpenAIClient
+}
 
-  func NewHandler(db *gorm.DB) *Handler {
-      return &Handler{
-          db:     db,
-          openai: NewOpenAIClientFromEnv(),
-      }
-  }
+func NewHandler(db *gorm.DB) *Handler {
+	return &Handler{
+		db:     db,
+		openai: NewOpenAIClientFromEnv(),
+	}
+}
 
-  // ── Request/Response types ────────────────────────────────────────────────────
+// ── Request/Response types ────────────────────────────────────────────────────
 
-  type SearchRequest struct {
-      Query    string                 `json:"query" binding:"required,min=2,max=500"`
-      Filters  map[string]interface{} `json:"filters"`
-      Limit    int                    `json:"limit"`
-      Offset   int                    `json:"offset"`
-  }
+type SearchRequest struct {
+	Query   string                 `json:"query" binding:"required,min=2,max=500"`
+	Filters map[string]interface{} `json:"filters"`
+	Limit   int                    `json:"limit"`
+	Offset  int                    `json:"offset"`
+}
 
-  type SearchIntent struct {
-      Keywords  []string  `json:"keywords"`
-      Category  string    `json:"category,omitempty"`
-      PriceMin  *float64  `json:"price_min,omitempty"`
-      PriceMax  *float64  `json:"price_max,omitempty"`
-      Location  string    `json:"location,omitempty"`
-      Condition string    `json:"condition,omitempty"`
-      Summary   string    `json:"summary"`
-      Suggestions []string `json:"suggestions"`
-  }
+type SearchIntent struct {
+	Keywords    []string `json:"keywords"`
+	Category    string   `json:"category,omitempty"`
+	PriceMin    *float64 `json:"price_min,omitempty"`
+	PriceMax    *float64 `json:"price_max,omitempty"`
+	Location    string   `json:"location,omitempty"`
+	Condition   string   `json:"condition,omitempty"`
+	Summary     string   `json:"summary"`
+	Suggestions []string `json:"suggestions"`
+}
 
-  type SearchResult struct {
-      ID             uuid.UUID `json:"id"`
-      Title          string    `json:"title"`
-      Description    string    `json:"description"`
-      Price          float64   `json:"price"`
-      Currency       string    `json:"currency"`
-      Category       string    `json:"category"`
-      Location       string    `json:"location"`
-      Condition      string    `json:"condition"`
-      Images         []string  `json:"images"`
-      SellerID       uuid.UUID `json:"seller_id"`
-      SimilarityScore float64  `json:"similarity_score"`
-      AIReason       string    `json:"ai_reason"`
-  }
+type SearchResult struct {
+	ID              uuid.UUID `json:"id"`
+	Title           string    `json:"title"`
+	Description     string    `json:"description"`
+	Price           float64   `json:"price"`
+	Currency        string    `json:"currency"`
+	Category        string    `json:"category"`
+	Location        string    `json:"location"`
+	Condition       string    `json:"condition"`
+	Images          []string  `json:"images"`
+	SellerID        uuid.UUID `json:"seller_id"`
+	SimilarityScore float64   `json:"similarity_score"`
+	AIReason        string    `json:"ai_reason"`
+}
 
-  // ── POST /api/v1/search ───────────────────────────────────────────────────────
+// ── POST /api/v1/search ───────────────────────────────────────────────────────
 
-  func (h *Handler) Search(c *gin.Context) {
-      var req SearchRequest
-      if err := c.ShouldBindJSON(&req); err != nil {
-          response.BadRequest(c, err.Error())
-          return
-      }
+func (h *Handler) Search(c *gin.Context) {
+	var req SearchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 
-      if req.Limit <= 0 || req.Limit > 50 {
-          req.Limit = 20
-      }
+	req.Query = security.SanitizeSearchQuery(req.Query)
+	if req.Query == "" {
+		response.BadRequest(c, "query is required")
+		return
+	}
 
-      ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-      defer cancel()
+	if req.Limit <= 0 || req.Limit > 50 {
+		req.Limit = 20
+	}
+	if req.Offset < 0 {
+		req.Offset = 0
+	}
 
-      // ── Step 1: Understand query with AI ──────────────────────────────────────
-      intent := h.parseIntent(ctx, req.Query, req.Filters)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
 
-      // ── Step 2: Semantic vector search ────────────────────────────────────────
-      var results []SearchResult
-      var err error
+	// ── Step 1: Understand query with AI ──────────────────────────────────────
+	intent := h.parseIntent(ctx, req.Query, req.Filters)
 
-      if h.openai != nil {
-          results, err = h.vectorSearch(ctx, req.Query, intent, req.Limit, req.Offset)
-          if err != nil {
-              slog.Warn("vector search failed, falling back to text search", "err", err)
-              results, err = h.textSearch(ctx, intent, req.Limit, req.Offset)
-          }
-      } else {
-          // Text-based fallback when OpenAI not configured
-          results, err = h.textSearch(ctx, intent, req.Limit, req.Offset)
-      }
+	// ── Step 2: Semantic vector search ────────────────────────────────────────
+	var results []SearchResult
+	var err error
 
-      if err != nil {
-          slog.Error("search failed", "err", err)
-          response.InternalError(c, err)
-          return
-      }
+	if h.openai != nil {
+		results, err = h.vectorSearch(ctx, req.Query, intent, req.Limit, req.Offset)
+		if err != nil {
+			slog.Warn("vector search failed, falling back to text search", "err", err)
+			results, err = h.textSearch(ctx, intent, req.Limit, req.Offset)
+		}
+	} else {
+		// Text-based fallback when OpenAI not configured
+		results, err = h.textSearch(ctx, intent, req.Limit, req.Offset)
+	}
 
-      // ── Step 3: Log the query ────────────────────────────────────────────────
-      go h.logQuery(req.Query, intent, len(results))
+	if err != nil {
+		slog.Error("search failed", "err", err)
+		response.InternalError(c, err)
+		return
+	}
 
-      c.JSON(http.StatusOK, gin.H{
-          "success": true,
-          "data": gin.H{
-              "query":      req.Query,
-              "intent":     intent,
-              "results":    results,
-              "total":      len(results),
-              "ai_powered": h.openai != nil,
-          },
-      })
-  }
+	// ── Step 3: Log query + analytics asynchronously ─────────────────────────
+	h.enqueueSearchAnalytics(req.Query, intent, len(results), c.GetString("user_id"))
 
-  // ── Autocomplete suggestions ─────────────────────────────────────────────────
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"query":      req.Query,
+			"intent":     intent,
+			"results":    results,
+			"total":      len(results),
+			"ai_powered": h.openai != nil,
+		},
+	})
+}
 
-  func (h *Handler) Suggest(c *gin.Context) {
-      q := strings.TrimSpace(c.Query("q"))
-      if len(q) < 2 {
-          c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"suggestions": []string{}}})
-          return
-      }
+// ── Autocomplete suggestions ─────────────────────────────────────────────────
 
-      ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-      defer cancel()
+func (h *Handler) Suggest(c *gin.Context) {
+	q := security.SanitizeSearchQuery(strings.TrimSpace(c.Query("q")))
+	if len(q) < 2 {
+		c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"suggestions": []string{}}})
+		return
+	}
 
-      suggestions := h.getSuggestions(ctx, q)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
 
-      c.JSON(http.StatusOK, gin.H{
-          "success": true,
-          "data": gin.H{
-              "suggestions": suggestions,
-              "ai_powered":  h.openai != nil,
-          },
-      })
-  }
+	suggestions := h.getSuggestions(ctx, q)
 
-  // ── Trending searches ─────────────────────────────────────────────────────────
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"suggestions": suggestions,
+			"ai_powered":  h.openai != nil,
+		},
+	})
+}
 
-  func (h *Handler) Trending(c *gin.Context) {
-      var trending []struct {
-          Query string `json:"query" gorm:"column:query"`
-          Count int    `json:"count" gorm:"column:count"`
-      }
-      h.db.Raw(`
+// ── Trending searches ─────────────────────────────────────────────────────────
+
+func (h *Handler) Trending(c *gin.Context) {
+	var trending []struct {
+		Query string `json:"query" gorm:"column:query"`
+		Count int    `json:"count" gorm:"column:count"`
+	}
+	h.db.Raw(`
           SELECT query, COUNT(*) as count
           FROM search_queries
           WHERE created_at > NOW() - INTERVAL '7 days'
@@ -162,147 +173,157 @@ package search
           LIMIT 10
       `).Scan(&trending)
 
-      if len(trending) == 0 {
-          trending = []struct {
-              Query string `json:"query" gorm:"column:query"`
-              Count int    `json:"count" gorm:"column:count"`
-          }{
-              {"iPhone 15 Pro", 1240}, {"Toyota Land Cruiser", 980},
-              {"شقة دبي", 875}, {"PS5", 760}, {"MacBook Pro M3", 710},
-              {"Rolex", 620}, {"سيارة للبيع", 590}, {"DJI Drone", 480},
-          }
-      }
+	if len(trending) == 0 {
+		trending = []struct {
+			Query string `json:"query" gorm:"column:query"`
+			Count int    `json:"count" gorm:"column:count"`
+		}{
+			{"iPhone 15 Pro", 1240}, {"Toyota Land Cruiser", 980},
+			{"شقة دبي", 875}, {"PS5", 760}, {"MacBook Pro M3", 710},
+			{"Rolex", 620}, {"سيارة للبيع", 590}, {"DJI Drone", 480},
+		}
+	}
 
-      c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"trending": trending}})
-  }
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"trending": trending}})
+}
 
-  // ── EmbedListing — generate and store embedding for a listing ─────────────────
+// ── EmbedListing — generate and store embedding for a listing ─────────────────
 
-  func (h *Handler) EmbedListing(c *gin.Context) {
-      listingID, err := uuid.Parse(c.Param("id"))
-      if err != nil {
-          response.BadRequest(c, "invalid listing id")
-          return
-      }
+func (h *Handler) EmbedListing(c *gin.Context) {
+	listingID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, "invalid listing id")
+		return
+	}
 
-      var listing struct {
-          Title       string `gorm:"column:title"`
-          Description string `gorm:"column:description"`
-          Category    string `gorm:"column:category"`
-          Location    string `gorm:"column:location"`
-          Condition   string `gorm:"column:condition"`
-      }
-      if err := h.db.Table("listings").Where("id = ?", listingID).First(&listing).Error; err != nil {
-          response.NotFound(c, "listing")
-          return
-      }
+	var listing struct {
+		Title       string `gorm:"column:title"`
+		Description string `gorm:"column:description"`
+		Category    string `gorm:"column:category"`
+		Location    string `gorm:"column:location"`
+		Condition   string `gorm:"column:condition"`
+	}
+	if err := h.db.Table("listings").Where("id = ?", listingID).First(&listing).Error; err != nil {
+		response.NotFound(c, "listing")
+		return
+	}
 
-      if h.openai == nil {
-          c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "OpenAI not configured"})
-          return
-      }
+	if h.openai == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"success": false, "message": "OpenAI not configured"})
+		return
+	}
 
-      content := fmt.Sprintf("%s. %s. Category: %s. Location: %s. Condition: %s.",
-          listing.Title, listing.Description, listing.Category, listing.Location, listing.Condition)
+	content := fmt.Sprintf("%s. %s. Category: %s. Location: %s. Condition: %s.",
+		listing.Title, listing.Description, listing.Category, listing.Location, listing.Condition)
 
-      contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
+	contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 
-      ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
-      defer cancel()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
 
-      embedding, err := h.openai.Embed(ctx, content)
-      if err != nil {
-          response.InternalError(c, err)
-          return
-      }
+	embedding, err := h.openai.Embed(ctx, content)
+	if err != nil {
+		response.InternalError(c, err)
+		return
+	}
 
-      vecStr := floatsToVectorStr(embedding)
-      h.db.Exec(`
+	vecStr := floatsToVectorStr(embedding)
+	h.db.Exec(`
           INSERT INTO listing_embeddings (listing_id, embedding, content_hash, model)
           VALUES (?, ?, ?, 'text-embedding-3-small')
           ON CONFLICT (listing_id) DO UPDATE
           SET embedding = EXCLUDED.embedding, content_hash = EXCLUDED.content_hash, updated_at = NOW()
       `, listingID, vecStr, contentHash)
 
-      c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"listing_id": listingID, "embedded": true}})
-  }
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"listing_id": listingID, "embedded": true}})
+}
 
-  // ── Internal helpers ──────────────────────────────────────────────────────────
+// ── Internal helpers ──────────────────────────────────────────────────────────
 
-  func (h *Handler) parseIntent(ctx context.Context, query string, filters map[string]interface{}) *SearchIntent {
-      intent := &SearchIntent{
-          Keywords:    strings.Fields(query),
-          Summary:     fmt.Sprintf("Searching for: \"%s\"", query),
-          Suggestions: []string{},
-      }
+func (h *Handler) parseIntent(ctx context.Context, query string, filters map[string]interface{}) *SearchIntent {
+	intent := &SearchIntent{
+		Keywords:    strings.Fields(query),
+		Summary:     fmt.Sprintf("Searching for: \"%s\"", query),
+		Suggestions: []string{},
+	}
 
-      if h.openai == nil {
-          lq := strings.ToLower(query)
-          if strings.Contains(lq, "iphone") || strings.Contains(lq, "samsung") || strings.Contains(lq, "laptop") {
-              intent.Category = "Electronics"
-          } else if strings.Contains(lq, "car") || strings.Contains(lq, "سيارة") {
-              intent.Category = "Vehicles"
-          } else if strings.Contains(lq, "villa") || strings.Contains(lq, "apartment") || strings.Contains(lq, "شقة") {
-              intent.Category = "Real Estate"
-          }
-          return intent
-      }
+	if h.openai == nil {
+		lq := strings.ToLower(query)
+		if strings.Contains(lq, "iphone") || strings.Contains(lq, "samsung") || strings.Contains(lq, "laptop") {
+			intent.Category = "Electronics"
+		} else if strings.Contains(lq, "car") || strings.Contains(lq, "سيارة") {
+			intent.Category = "Vehicles"
+		} else if strings.Contains(lq, "villa") || strings.Contains(lq, "apartment") || strings.Contains(lq, "شقة") {
+			intent.Category = "Real Estate"
+		}
+		return intent
+	}
 
-      systemPrompt := `You are a GCC marketplace search assistant. Return ONLY valid JSON:
+	systemPrompt := `You are a GCC marketplace search assistant. Return ONLY valid JSON:
   {"keywords":["kw1","kw2"],"category":"Electronics|Vehicles|Real Estate|Clothing|Furniture|Watches|Other|null",
   "price_min":null,"price_max":null,"location":"city_or_null","condition":"New|Like New|Good|Fair|null",
   "summary":"human readable summary","suggestions":["rel1","rel2","rel3"]}`
 
-      resp, err := h.openai.ChatComplete(ctx, systemPrompt,
-          fmt.Sprintf("Query: \"%s\"\nFilters: %v", query, filters), 400)
-      if err != nil {
-          return intent
-      }
+	resp, err := h.openai.ChatComplete(ctx, systemPrompt,
+		fmt.Sprintf("Query: \"%s\"\nFilters: %v", query, filters), 400)
+	if err != nil {
+		return intent
+	}
 
-      var parsed struct {
-          Keywords    []string  `json:"keywords"`
-          Category    string    `json:"category"`
-          PriceMin    *float64  `json:"price_min"`
-          PriceMax    *float64  `json:"price_max"`
-          Location    string    `json:"location"`
-          Condition   string    `json:"condition"`
-          Summary     string    `json:"summary"`
-          Suggestions []string  `json:"suggestions"`
-      }
-      if err := json.Unmarshal([]byte(resp), &parsed); err == nil {
-          if len(parsed.Keywords) > 0 { intent.Keywords = parsed.Keywords }
-          if parsed.Category != "" && parsed.Category != "null" { intent.Category = parsed.Category }
-          intent.PriceMin = parsed.PriceMin
-          intent.PriceMax = parsed.PriceMax
-          if parsed.Location != "" && parsed.Location != "null" { intent.Location = parsed.Location }
-          if parsed.Condition != "" && parsed.Condition != "null" { intent.Condition = parsed.Condition }
-          if parsed.Summary != "" { intent.Summary = parsed.Summary }
-          intent.Suggestions = parsed.Suggestions
-      }
-      return intent
-  }
+	var parsed struct {
+		Keywords    []string `json:"keywords"`
+		Category    string   `json:"category"`
+		PriceMin    *float64 `json:"price_min"`
+		PriceMax    *float64 `json:"price_max"`
+		Location    string   `json:"location"`
+		Condition   string   `json:"condition"`
+		Summary     string   `json:"summary"`
+		Suggestions []string `json:"suggestions"`
+	}
+	if err := json.Unmarshal([]byte(resp), &parsed); err == nil {
+		if len(parsed.Keywords) > 0 {
+			intent.Keywords = parsed.Keywords
+		}
+		if parsed.Category != "" && parsed.Category != "null" {
+			intent.Category = parsed.Category
+		}
+		intent.PriceMin = parsed.PriceMin
+		intent.PriceMax = parsed.PriceMax
+		if parsed.Location != "" && parsed.Location != "null" {
+			intent.Location = parsed.Location
+		}
+		if parsed.Condition != "" && parsed.Condition != "null" {
+			intent.Condition = parsed.Condition
+		}
+		if parsed.Summary != "" {
+			intent.Summary = parsed.Summary
+		}
+		intent.Suggestions = parsed.Suggestions
+	}
+	return intent
+}
 
-  func (h *Handler) vectorSearch(ctx context.Context, query string, intent *SearchIntent, limit, offset int) ([]SearchResult, error) {
-      embedding, err := h.openai.Embed(ctx, query)
-      if err != nil {
-          return nil, err
-      }
-      vecStr := floatsToVectorStr(embedding)
+func (h *Handler) vectorSearch(ctx context.Context, query string, intent *SearchIntent, limit, offset int) ([]SearchResult, error) {
+	embedding, err := h.openai.Embed(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	vecStr := floatsToVectorStr(embedding)
 
-      type row struct {
-          ID             uuid.UUID `gorm:"column:id"`
-          Title          string    `gorm:"column:title"`
-          Description    string    `gorm:"column:description"`
-          Price          float64   `gorm:"column:price"`
-          Currency       string    `gorm:"column:currency"`
-          Category       string    `gorm:"column:category"`
-          Location       string    `gorm:"column:location"`
-          Condition      string    `gorm:"column:condition"`
-          SellerID       uuid.UUID `gorm:"column:seller_id"`
-          SimilarityScore float64  `gorm:"column:similarity"`
-      }
-      var rows []row
-      err = h.db.WithContext(ctx).Raw(`
+	type row struct {
+		ID              uuid.UUID `gorm:"column:id"`
+		Title           string    `gorm:"column:title"`
+		Description     string    `gorm:"column:description"`
+		Price           float64   `gorm:"column:price"`
+		Currency        string    `gorm:"column:currency"`
+		Category        string    `gorm:"column:category"`
+		Location        string    `gorm:"column:location"`
+		Condition       string    `gorm:"column:condition"`
+		SellerID        uuid.UUID `gorm:"column:seller_id"`
+		SimilarityScore float64   `gorm:"column:similarity"`
+	}
+	var rows []row
+	err = h.db.WithContext(ctx).Raw(`
           SELECT l.id, l.title, l.description, l.price, l.currency,
                  l.category, l.location, l.condition, l.seller_id,
                  1 - (le.embedding <=> ?::vector) AS similarity
@@ -313,157 +334,205 @@ package search
           LIMIT ? OFFSET ?
       `, vecStr, vecStr, limit, offset).Scan(&rows).Error
 
-      if err != nil {
-          return nil, err
-      }
+	if err != nil {
+		return nil, err
+	}
 
-      results := make([]SearchResult, len(rows))
-      for i, r := range rows {
-          reason := "Possible match"
-          if r.SimilarityScore >= 0.85 { reason = "Excellent semantic match" } else
-          if r.SimilarityScore >= 0.70 { reason = "Strong match for your search" } else
-          if r.SimilarityScore >= 0.55 { reason = "Good match" }
-          results[i] = SearchResult{
-              ID: r.ID, Title: r.Title, Description: r.Description,
-              Price: r.Price, Currency: r.Currency, Category: r.Category,
-              Location: r.Location, Condition: r.Condition, SellerID: r.SellerID,
-              SimilarityScore: r.SimilarityScore, AIReason: reason,
-          }
-      }
-      return results, nil
-  }
+	results := make([]SearchResult, len(rows))
+	for i, r := range rows {
+		reason := "Possible match"
+		if r.SimilarityScore >= 0.85 {
+			reason = "Excellent semantic match"
+		} else if r.SimilarityScore >= 0.70 {
+			reason = "Strong match for your search"
+		} else if r.SimilarityScore >= 0.55 {
+			reason = "Good match"
+		}
+		results[i] = SearchResult{
+			ID: r.ID, Title: r.Title, Description: r.Description,
+			Price: r.Price, Currency: r.Currency, Category: r.Category,
+			Location: r.Location, Condition: r.Condition, SellerID: r.SellerID,
+			SimilarityScore: r.SimilarityScore, AIReason: reason,
+		}
+	}
+	return results, nil
+}
 
-  func (h *Handler) textSearch(ctx context.Context, intent *SearchIntent, limit, offset int) ([]SearchResult, error) {
-      query := "%" + strings.Join(intent.Keywords, "%") + "%"
-      type row struct {
-          ID          uuid.UUID `gorm:"column:id"`
-          Title       string    `gorm:"column:title"`
-          Description string    `gorm:"column:description"`
-          Price       float64   `gorm:"column:price"`
-          Currency    string    `gorm:"column:currency"`
-          Category    string    `gorm:"column:category"`
-          Location    string    `gorm:"column:location"`
-          Condition   string    `gorm:"column:condition"`
-          SellerID    uuid.UUID `gorm:"column:seller_id"`
-      }
-      var rows []row
-      db := h.db.WithContext(ctx).Table("listings").Where("status = 'active'").
-          Where("title ILIKE ? OR description ILIKE ?", query, query)
-      if intent.Category != "" {
-          db = db.Where("category ILIKE ?", "%"+intent.Category+"%")
-      }
-      if intent.Location != "" {
-          db = db.Where("location ILIKE ?", "%"+intent.Location+"%")
-      }
-      if intent.PriceMax != nil {
-          db = db.Where("price <= ?", *intent.PriceMax)
-      }
-      err := db.Limit(limit).Offset(offset).Scan(&rows).Error
-      if err != nil {
-          return nil, err
-      }
-      results := make([]SearchResult, len(rows))
-      for i, r := range rows {
-          results[i] = SearchResult{
-              ID: r.ID, Title: r.Title, Description: r.Description,
-              Price: r.Price, Currency: r.Currency, Category: r.Category,
-              Location: r.Location, Condition: r.Condition, SellerID: r.SellerID,
-              SimilarityScore: 0.5, AIReason: "Text match",
-          }
-      }
-      return results, nil
-  }
+func (h *Handler) textSearch(ctx context.Context, intent *SearchIntent, limit, offset int) ([]SearchResult, error) {
+	query := "%" + strings.Join(intent.Keywords, "%") + "%"
+	type row struct {
+		ID          uuid.UUID `gorm:"column:id"`
+		Title       string    `gorm:"column:title"`
+		Description string    `gorm:"column:description"`
+		Price       float64   `gorm:"column:price"`
+		Currency    string    `gorm:"column:currency"`
+		Category    string    `gorm:"column:category"`
+		Location    string    `gorm:"column:location"`
+		Condition   string    `gorm:"column:condition"`
+		SellerID    uuid.UUID `gorm:"column:seller_id"`
+	}
+	var rows []row
+	db := h.db.WithContext(ctx).Table("listings").Where("status = 'active'").
+		Where("title ILIKE ? OR description ILIKE ?", query, query)
+	if intent.Category != "" {
+		db = db.Where("category ILIKE ?", "%"+intent.Category+"%")
+	}
+	if intent.Location != "" {
+		db = db.Where("location ILIKE ?", "%"+intent.Location+"%")
+	}
+	if intent.PriceMax != nil {
+		db = db.Where("price <= ?", *intent.PriceMax)
+	}
+	err := db.Limit(limit).Offset(offset).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	results := make([]SearchResult, len(rows))
+	for i, r := range rows {
+		results[i] = SearchResult{
+			ID: r.ID, Title: r.Title, Description: r.Description,
+			Price: r.Price, Currency: r.Currency, Category: r.Category,
+			Location: r.Location, Condition: r.Condition, SellerID: r.SellerID,
+			SimilarityScore: 0.5, AIReason: "Text match",
+		}
+	}
+	return results, nil
+}
 
-  func (h *Handler) getSuggestions(ctx context.Context, q string) []string {
-      defaults := []string{q + " for sale", q + " Dubai", "cheap " + q, "used " + q, q + " new"}
-      if h.openai == nil { return defaults }
+func (h *Handler) getSuggestions(ctx context.Context, q string) []string {
+	defaults := []string{q + " for sale", q + " Dubai", "cheap " + q, "used " + q, q + " new"}
+	if h.openai == nil {
+		return defaults
+	}
 
-      resp, err := h.openai.ChatComplete(ctx,
-          "You are a GCC marketplace autocomplete engine. Given a partial query, return 5 suggestions as a JSON array of strings (2-5 words each). Match the language of the input.",
-          "Partial query: \""+q+"\"", 150)
-      if err != nil { return defaults }
+	resp, err := h.openai.ChatComplete(ctx,
+		"You are a GCC marketplace autocomplete engine. Given a partial query, return 5 suggestions as a JSON array of strings (2-5 words each). Match the language of the input.",
+		"Partial query: \""+q+"\"", 150)
+	if err != nil {
+		return defaults
+	}
 
-      var suggestions []string
-      if err := json.Unmarshal([]byte(resp), &suggestions); err == nil && len(suggestions) > 0 {
-          return suggestions
-      }
-      return defaults
-  }
+	var suggestions []string
+	if err := json.Unmarshal([]byte(resp), &suggestions); err == nil && len(suggestions) > 0 {
+		return suggestions
+	}
+	return defaults
+}
 
-  func (h *Handler) logQuery(query string, intent *SearchIntent, resultCount int) {
-      intentJSON, _ := json.Marshal(intent)
-      h.db.Exec(`
+func (h *Handler) logQuery(query string, intent *SearchIntent, resultCount int) {
+	intentJSON, _ := json.Marshal(intent)
+	h.db.Exec(`
           INSERT INTO search_queries (query, intent_json, result_count)
           VALUES (?, ?, ?)
       `, query, string(intentJSON), resultCount)
-  }
+}
 
-  func floatsToVectorStr(v []float32) string {
-      if len(v) == 0 { return "[]" }
-      parts := make([]string, len(v))
-      for i, f := range v { parts[i] = fmt.Sprintf("%.6f", f) }
-      return "[" + strings.Join(parts, ",") + "]"
-  }
+func (h *Handler) enqueueSearchAnalytics(query string, intent *SearchIntent, resultCount int, userID string) {
+	_ = jobs.EnqueueDefault(&jobs.Job{
+		Type:        jobs.JobTypeAnalytics,
+		Priority:    6,
+		MaxAttempts: 3,
+		Payload: map[string]interface{}{
+			"event":   "search.query",
+			"user_id": userID,
+			"properties": map[string]interface{}{
+				"query":        query,
+				"result_count": resultCount,
+				"category":     intent.Category,
+			},
+		},
+	})
 
-  // ── OpenAI client (stdlib HTTP only) ─────────────────────────────────────────
+	go h.logQuery(query, intent, resultCount)
+}
 
-  type OpenAIClient struct {
-      baseURL string
-      apiKey  string
-      client  *http.Client
-  }
+func floatsToVectorStr(v []float32) string {
+	if len(v) == 0 {
+		return "[]"
+	}
+	parts := make([]string, len(v))
+	for i, f := range v {
+		parts[i] = fmt.Sprintf("%.6f", f)
+	}
+	return "[" + strings.Join(parts, ",") + "]"
+}
 
-  func NewOpenAIClientFromEnv() *OpenAIClient {
-      base := os.Getenv("OPENAI_API_BASE")
-      key  := os.Getenv("OPENAI_API_KEY")
-      if base == "" { base = "https://api.openai.com/v1" }
-      if key == "" {
-          slog.Warn("OPENAI_API_KEY not set — AI search degraded to text-only mode")
-          return nil
-      }
-      return &OpenAIClient{baseURL: base, apiKey: key, client: &http.Client{Timeout: 15 * time.Second}}
-  }
+// ── OpenAI client (stdlib HTTP only) ─────────────────────────────────────────
 
-  func (c *OpenAIClient) Embed(ctx context.Context, text string) ([]float32, error) {
-      payload := map[string]interface{}{"input": text, "model": "text-embedding-3-small"}
-      b, _ := json.Marshal(payload)
-      req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/embeddings", strings.NewReader(string(b)))
-      req.Header.Set("Authorization", "Bearer "+c.apiKey)
-      req.Header.Set("Content-Type", "application/json")
-      resp, err := c.client.Do(req)
-      if err != nil { return nil, err }
-      defer resp.Body.Close()
-      var result struct {
-          Data []struct { Embedding []float32 `json:"embedding"` } `json:"data"`
-      }
-      if err := json.NewDecoder(resp.Body).Decode(&result); err != nil { return nil, err }
-      if len(result.Data) == 0 { return nil, fmt.Errorf("no embedding returned") }
-      return result.Data[0].Embedding, nil
-  }
+type OpenAIClient struct {
+	baseURL string
+	apiKey  string
+	client  *http.Client
+}
 
-  func (c *OpenAIClient) ChatComplete(ctx context.Context, system, user string, maxTokens int) (string, error) {
-      payload := map[string]interface{}{
-          "model": "gpt-4o-mini",
-          "messages": []map[string]string{
-              {"role": "system", "content": system},
-              {"role": "user", "content": user},
-          },
-          "max_tokens": maxTokens,
-      }
-      b, _ := json.Marshal(payload)
-      req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", strings.NewReader(string(b)))
-      req.Header.Set("Authorization", "Bearer "+c.apiKey)
-      req.Header.Set("Content-Type", "application/json")
-      resp, err := c.client.Do(req)
-      if err != nil { return "", err }
-      defer resp.Body.Close()
-      var result struct {
-          Choices []struct {
-              Message struct { Content string `json:"content"` } `json:"message"`
-          } `json:"choices"`
-      }
-      if err := json.NewDecoder(resp.Body).Decode(&result); err != nil { return "", err }
-      if len(result.Choices) == 0 { return "", fmt.Errorf("no choices returned") }
-      return result.Choices[0].Message.Content, nil
-  }
-  
+func NewOpenAIClientFromEnv() *OpenAIClient {
+	base := os.Getenv("OPENAI_API_BASE")
+	key := os.Getenv("OPENAI_API_KEY")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	if key == "" {
+		slog.Warn("OPENAI_API_KEY not set — AI search degraded to text-only mode")
+		return nil
+	}
+	return &OpenAIClient{baseURL: base, apiKey: key, client: &http.Client{Timeout: 15 * time.Second}}
+}
+
+func (c *OpenAIClient) Embed(ctx context.Context, text string) ([]float32, error) {
+	payload := map[string]interface{}{"input": text, "model": "text-embedding-3-small"}
+	b, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/embeddings", strings.NewReader(string(b)))
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	if len(result.Data) == 0 {
+		return nil, fmt.Errorf("no embedding returned")
+	}
+	return result.Data[0].Embedding, nil
+}
+
+func (c *OpenAIClient) ChatComplete(ctx context.Context, system, user string, maxTokens int) (string, error) {
+	payload := map[string]interface{}{
+		"model": "gpt-4o-mini",
+		"messages": []map[string]string{
+			{"role": "system", "content": system},
+			{"role": "user", "content": user},
+		},
+		"max_tokens": maxTokens,
+	}
+	b, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", strings.NewReader(string(b)))
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if len(result.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned")
+	}
+	return result.Choices[0].Message.Content, nil
+}

@@ -1,0 +1,698 @@
+طك<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard Prompt — GeoCore Next</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f4ef; color: #1a1a18; padding: 2rem 1rem; }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #73726c; margin-bottom: 20px; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tag { font-size: 11px; padding: 3px 10px; border-radius: 12px; font-weight: 500; }
+  .t1 { background: #E6F1FB; color: #0C447C; }
+  .t2 { background: #FCEBEB; color: #A32D2D; }
+  .t3 { background: #E1F5EE; color: #085041; }
+  .t4 { background: #FAEEDA; color: #633806; }
+  .tabs { display: flex; gap: 4px; background: #e8e6e0; padding: 4px; border-radius: 10px; margin-bottom: 16px; }
+  .tab { flex: 1; text-align: center; padding: 8px 6px; font-size: 12px; border-radius: 7px; cursor: pointer; color: #73726c; transition: all .15s; border: none; background: transparent; font-family: inherit; }
+  .tab.active { background: #fff; color: #1a1a18; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .view { display: none; }
+  .view.active { display: block; }
+  .prompt-box { background: #fff; border: 1px solid #e0ded8; border-radius: 12px; padding: 20px; font-family: "SF Mono","Fira Code","Consolas",monospace; font-size: 11.5px; color: #1a1a18; line-height: 1.8; white-space: pre-wrap; word-break: break-word; max-height: 560px; overflow-y: auto; direction: ltr; text-align: left; }
+  .copy-row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+  .copy-btn { padding: 9px 20px; background: #fff; border: 1px solid #ccc; border-radius: 8px; font-size: 12px; cursor: pointer; color: #1a1a18; transition: background .15s; font-family: inherit; }
+  .copy-btn:hover { background: #f0ede8; }
+  .copy-btn.copied { color: #085041; border-color: #1D9E75; }
+  .copy-all-btn { padding: 9px 20px; background: #E6F1FB; border: 1px solid #85B7EB; border-radius: 8px; font-size: 12px; cursor: pointer; color: #0C447C; font-weight: 600; font-family: inherit; }
+  .copy-all-btn:hover { background: #B5D4F4; }
+  .note { font-size: 11px; color: #888780; margin-top: 8px; line-height: 1.6; }
+  .footer { margin-top: 24px; font-size: 11px; color: #888780; text-align: center; border-top: 1px solid #e0ded8; padding-top: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Admin Dashboard Prompt — GeoCore Next</h1>
+  <p class="subtitle">eBay-Level Control Center · Settings Engine · Trust &amp; Safety · Feature Flags · AWS</p>
+  <div class="tags">
+    <span class="tag t1">eBay-level Admin</span>
+    <span class="tag t2">Trust &amp; Safety</span>
+    <span class="tag t3">Settings Engine</span>
+    <span class="tag t4">AWS Ready</span>
+  </div>
+  <div class="tabs">
+    <button class="tab active" onclick="sw('p1',this)">Part 1 — Foundation</button>
+    <button class="tab" onclick="sw('p2',this)">Part 2 — eBay Features</button>
+    <button class="tab" onclick="sw('p3',this)">Part 3 — Trust &amp; Safety</button>
+    <button class="tab" onclick="sw('p4',this)">Part 4 — Build &amp; Tests</button>
+  </div>
+
+  <div id="v-p1" class="view active">
+    <div class="prompt-box" id="p1"># ROLE — Senior Full-Stack Architect (eBay-Level Admin Dashboard)
+
+You are building the Admin Control Center for GeoCore Next.
+This is NOT a simple CRUD dashboard — this is an enterprise-grade operations
+platform modeled after eBay's internal admin tools, with full Trust & Safety,
+ML fraud detection hooks, Seller Analytics (Traffic Watch), and a Settings Engine
+that makes every future feature controllable without a code deploy.
+
+Stack:
+- Backend:  Go 1.23 · Gin · GORM · PostgreSQL · Redis
+- Frontend: Next.js 15 App Router · TypeScript · Tailwind CSS
+- Admin App: Separate Next.js app at admin/ running on port 3001
+- Deployed:  AWS (EC2 + RDS + ElastiCache + S3 + CloudWatch)
+
+---
+
+## LAYER 0 — THE SETTINGS ENGINE (Build This First)
+
+### Database Tables
+
+CREATE TABLE admin_settings (
+  key          VARCHAR(255) PRIMARY KEY,
+  value        TEXT NOT NULL,
+  type         VARCHAR(50) NOT NULL,  -- bool|string|number|json|select|secret
+  category     VARCHAR(100) NOT NULL,
+  label        VARCHAR(255) NOT NULL,
+  description  TEXT,
+  options      JSONB,
+  is_public    BOOLEAN DEFAULT FALSE,
+  is_secret    BOOLEAN DEFAULT FALSE,
+  updated_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_by   UUID REFERENCES users(id)
+);
+
+CREATE TABLE feature_flags (
+  key             VARCHAR(255) PRIMARY KEY,
+  enabled         BOOLEAN DEFAULT FALSE,
+  rollout_pct     INTEGER DEFAULT 100,
+  allowed_groups  TEXT[],
+  description     TEXT,
+  category        VARCHAR(100),
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE admin_audit_log (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_user_id UUID REFERENCES users(id),
+  action        VARCHAR(100) NOT NULL,
+  target_type   VARCHAR(50),
+  target_id     VARCHAR(255),
+  old_value     JSONB,
+  new_value     JSONB,
+  ip_address    INET,
+  user_agent    TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE support_tickets (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID REFERENCES users(id),
+  subject     VARCHAR(255) NOT NULL,
+  status      VARCHAR(50) DEFAULT 'open',
+  priority    VARCHAR(20) DEFAULT 'normal',
+  category    VARCHAR(100),
+  assigned_to UUID REFERENCES users(id),
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE ticket_messages (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id  UUID REFERENCES support_tickets(id),
+  sender_id  UUID REFERENCES users(id),
+  body       TEXT NOT NULL,
+  is_admin   BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE trust_flags (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  target_type VARCHAR(50) NOT NULL,
+  target_id   UUID NOT NULL,
+  flag_type   VARCHAR(100) NOT NULL,
+  severity    VARCHAR(20) NOT NULL,
+  source      VARCHAR(50) NOT NULL,
+  status      VARCHAR(50) DEFAULT 'open',
+  notes       TEXT,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ,
+  resolved_by UUID REFERENCES users(id)
+);
+
+### Settings Seed Data
+
+// SITE
+"site.name"                      -> "GeoCore Next"    string  public
+"site.tagline"                   -> ""                string  public
+"site.logo_url"                  -> ""                string  public
+"site.maintenance_mode"          -> false             bool
+"site.on"                        -> true              bool    public
+"site.default_currency"          -> "USD"             select  public
+"site.default_language"          -> "en"              select  public
+"site.google_analytics_id"       -> ""                string  public
+
+// LISTINGS
+"listings.require_approval"      -> false             bool
+"listings.max_images"            -> 10                number
+"listings.max_duration_days"     -> 60                number
+"listings.profanity_filter"      -> true              bool
+"listings.banned_keywords"       -> []                json
+
+// AUCTIONS
+"auctions.proxy_bidding"         -> true              bool    public
+"auctions.min_bid_increment"     -> 1.0               number  public
+"auctions.extension_minutes"     -> 5                 number  public
+"auctions.snipe_protection"      -> true              bool    public
+
+// SEARCH RANKING
+"search.featured_boost"          -> 2.0               number
+"search.recency_weight"          -> 0.3               number
+"search.review_weight"           -> 0.4               number
+"search.sales_weight"            -> 0.3               number
+
+// PAYMENTS
+"payments.stripe_enabled"        -> false             bool
+"payments.stripe_pk"             -> ""                string  public
+"payments.stripe_sk"             -> ""                secret
+"payments.stripe_webhook_secret" -> ""                secret
+"payments.paymob_enabled"        -> false             bool
+"payments.paymob_api_key"        -> ""                secret
+"payments.paypal_enabled"        -> false             bool
+"payments.paypal_client_id"      -> ""                string  public
+"payments.paypal_client_secret"  -> ""                secret
+"payments.platform_fee_pct"      -> 5.0               number  public
+"payments.payout_schedule"       -> "weekly"          select
+
+// PRICING
+"pricing.featured_listing_cost"  -> 2.99              number  public
+"pricing.success_fee_default"    -> 5.0               number  public
+"pricing.success_fee_vehicles"   -> 2.5               number  public
+"pricing.success_fee_real_estate"-> 1.0               number  public
+
+// SHIPPING
+"shipping.dhl_enabled"           -> false             bool
+"shipping.dhl_api_key"           -> ""                secret
+"shipping.free_shipping_min"     -> 0                 number  public
+
+// EMAIL
+"email.provider"                 -> "smtp"            select
+"email.from_address"             -> ""                string
+"email.resend_api_key"           -> ""                secret
+"email.smtp_host"                -> ""                string
+"email.smtp_port"                -> 587               number
+"email.smtp_pass"                -> ""                secret
+
+// TRUST & SAFETY
+"trust.auto_ban_threshold"       -> 5                 number
+"trust.ml_fraud_enabled"         -> false             bool
+"trust.require_phone_verify"     -> false             bool
+"trust.require_id_verify"        -> false             bool
+"trust.max_reports_before_review"-> 3                 number
+
+// AWS
+"aws.cloudwatch_enabled"         -> false             bool
+"aws.s3_bucket"                  -> ""                string
+"aws.s3_access_key"              -> ""                secret
+"aws.s3_secret_key"              -> ""                secret
+"aws.cloudfront_url"             -> ""                string  public
+
+// FEATURE FLAGS (in feature_flags table, all enabled=false)
+"feature.dutch_auction"          -> false   commerce
+"feature.reverse_auction"        -> false   commerce
+"feature.storefronts"            -> false   commerce
+"feature.wallet"                 -> false   commerce
+"feature.price_plans"            -> false   commerce
+"feature.cart"                   -> false   commerce
+"feature.loyalty_program"        -> false   growth
+"feature.referral_program"       -> false   growth
+"feature.deals_promotions"       -> false   growth
+"feature.subscription_plans"     -> false   growth
+"feature.affiliate_program"      -> false   growth
+"feature.live_streaming"         -> false   auctions
+"feature.proxy_bidding_ui"       -> false   auctions
+"feature.paypal"                 -> false   payments
+"feature.crypto_payments"        -> false   payments
+"feature.bnpl"                   -> false   payments
+"feature.ai_chatbot"             -> false   future
+"feature.ai_fraud_detection"     -> false   future
+"feature.ai_pricing"             -> false   future
+"feature.ar_preview"             -> false   future
+"feature.crowdshipping"          -> false   future
+"feature.p2p_exchange"           -> false   future
+"feature.blockchain"             -> false   future
+"feature.plugin_marketplace"     -> false   future
+
+Secret rule: any is_secret=true must be masked as "••••••[last4]"
+in ALL GET responses. Never return the raw value.
+
+Settings API:
+GET  /api/admin/settings
+GET  /api/admin/settings/:category
+PUT  /api/admin/settings/:key
+PUT  /api/admin/settings/bulk
+GET  /api/v1/config/public         -- PUBLIC, no auth, is_public only
+
+GET  /api/admin/features
+PUT  /api/admin/features/:key
+GET  /api/v1/features              -- PUBLIC, user-aware by rollout_pct</div>
+    <div class="copy-row">
+      <button class="copy-btn" onclick="cp('p1',this)">📋 نسخ Part 1</button>
+    </div>
+  </div>
+
+  <div id="v-p2" class="view">
+    <div class="prompt-box" id="p2">## LAYER 1 — eBay-LEVEL FEATURES
+
+### A. Traffic Watch (Seller Analytics)
+
+GET /api/admin/analytics/traffic
+Returns per-listing: page_views, unique_visitors, watchlist_adds,
+message_inquiries, conversion_rate, avg_time_on_page
+
+GET /api/admin/analytics/overview
+Returns: daily_active_users, new_registrations, listings_created,
+auctions_started, gmv, take_rate
+
+Frontend: admin/app/analytics/page.tsx
+- Traffic Watch table: searchable, sortable by any metric
+- Line charts: DAU + Revenue + GMV over 30/90 days
+- Top 10 categories by revenue
+- Funnel: Registered -> Listed -> Sold -> Reviewed
+
+### B. Search Ranking Control (eBay Cassini-inspired)
+
+Frontend: admin/app/settings/search/page.tsx
+- Sliders: featured_boost, recency_weight, review_weight, sales_weight
+- Weights must sum to 1.0 — validate client-side
+- "Preview": shows how top 5 listings reorder with new weights
+- Banned keywords manager: add/remove words that auto-reject listings
+
+### C. Dynamic Pricing Controls
+
+Frontend: admin/app/settings/pricing/page.tsx
+- Fee schedule table — all pricing.* settings editable inline
+- Live calculator: "If sale price = $500 -> seller receives $X"
+- Category-specific fee overrides
+
+### D. Shipping Manager
+
+Frontend: admin/app/settings/shipping/page.tsx
+- Toggle each carrier on/off (DHL, Aramex)
+- API credentials (masked input fields)
+- Test rate: enter dimensions + weight -> see carrier rates
+- Delivery time estimates by region (editable table)
+
+### E. CRM & Support Tickets
+
+GET   /api/admin/tickets?status=open&priority=high
+POST  /api/admin/tickets/:id/reply
+PATCH /api/admin/tickets/:id/assign
+
+Frontend: admin/app/tickets/page.tsx
+- Queue sorted by priority: urgent -> high -> normal -> low
+- Color-coded by category (payment=red, account=amber, listing=blue)
+- Bulk actions: assign, change priority, close
+- SLA: average response time metric
+
+Frontend: admin/app/tickets/[id]/page.tsx
+- Full conversation thread
+- User sidebar: account age, sales count, flag count, open disputes
+- Quick actions: ban user, refund payment, remove listing
+- Internal notes (admin-only, never shown to user)
+
+### F. KYC & Identity Verification
+
+Migration:
+ALTER TABLE users ADD COLUMN kyc_status VARCHAR(50) DEFAULT 'none';
+ALTER TABLE users ADD COLUMN phone_verified BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN id_document_url TEXT;
+ALTER TABLE users ADD COLUMN kyc_reviewed_by UUID REFERENCES users(id);
+ALTER TABLE users ADD COLUMN kyc_rejection_reason TEXT;
+
+GET   /api/admin/users?kyc_status=pending
+PATCH /api/admin/users/:id/kyc
+Body: { status: "approved"|"rejected", notes: "" }
+
+Frontend: admin/app/users/kyc/page.tsx
+- Queue of pending KYC submissions
+- View uploaded ID document (admin-only)
+- Approve or reject with required written reason
+- KYC completion rate metric
+
+### G. Seller Hub (Admin View)
+
+GET /api/admin/sellers/top?period=30d&limit=20
+Returns: seller_id, username, gmv, avg_rating,
+         dispute_rate, refund_rate, flag_count
+
+GET /api/admin/sellers/:id/report
+
+Frontend: admin/app/sellers/page.tsx
+- Leaderboard: top sellers by GMV
+- Risk table: sellers with high dispute_rate or flag_count
+- Seller Scorecard: full health metrics per seller
+- Export CSV of all sellers with health metrics</div>
+    <div class="copy-row">
+      <button class="copy-btn" onclick="cp('p2',this)">📋 نسخ Part 2</button>
+    </div>
+  </div>
+
+  <div id="v-p3" class="view">
+    <div class="prompt-box" id="p3">## LAYER 2 — TRUST & SAFETY (eBay-Level)
+
+### A. Rule-Based Fraud Engine
+
+Implement in: backend/internal/trust/rules.go
+
+Rules:
+- new_account_high_value: account < 7 days + listing > $500  -> risk 0.6
+- velocity_spike: > 20 bids in 1 hour                        -> risk 0.7
+- bid_increment_abuse: always exactly min increment           -> risk 0.4
+- repeated_reporter: reported by 3+ unique users this week   -> risk 0.5
+- payment_mismatch: billing country != IP country            -> risk 0.3
+- mass_listing: > 50 listings created in 24h                 -> risk 0.8
+
+When risk_score > 0.7 -> auto-create trust_flag (source="rule_engine")
+When risk_score > 0.9 -> auto-suspend user + flag + notify admin
+
+Internal API (NOT public, internal only):
+POST /api/internal/fraud/evaluate
+Body:     { event_type, user_id, metadata }
+Response: { risk_score, flags[], recommendation }
+
+Setting "feature.ai_fraud_detection"=true will later replace
+the rule engine with an ML model — zero code change needed.
+
+### B. Trust & Safety Dashboard
+
+GET  /api/admin/trust/flags?status=open&severity=high
+GET  /api/admin/trust/flags/:id
+PATCH /api/admin/trust/flags/:id/resolve
+GET  /api/admin/trust/stats
+     Returns: open_flags, auto_resolved_today,
+              manual_review_needed, banned_today, fraud_prevented_usd
+
+Frontend: admin/app/trust/page.tsx
+- Cards: Open Flags / Critical / Auto-resolved today / Fraud prevented ($)
+- Flags table: type, severity, source, target, age, status
+- Filter: severity, type, source, date range
+- Bulk resolve / bulk escalate
+
+Frontend: admin/app/trust/[id]/page.tsx
+- What triggered the flag + all metadata
+- Full target profile (user or listing)
+- Actions: Warn | Suspend 7 days | Permanent Ban | False Positive
+- Same user's full flag history
+- Internal admin notes
+
+### C. User Ban System
+
+PATCH /api/admin/users/:id/ban
+Body: { type: "temporary"|"permanent", reason, duration_days? }
+
+PATCH /api/admin/users/:id/unban
+Body: { reason }
+
+When banned:
+- All JWT tokens invalidated (delete all keys from Redis)
+- Active listings hidden — NOT deleted (fully reversible)
+- Active auction bids cancelled (sellers notified by email)
+- Pending payouts held pending admin review
+- Email sent to user with reason + appeal instructions
+
+Reason options (required dropdown):
+fraud | fake_listings | payment_abuse |
+harassment | spam | policy_violation | other
+
+All ban/unban actions logged in admin_audit_log.
+
+### D. Listing Moderation Queue
+
+GET   /api/admin/listings/moderation?status=pending_review
+PATCH /api/admin/listings/:id/approve
+PATCH /api/admin/listings/:id/reject   body: { reason }
+PATCH /api/admin/listings/:id/feature
+POST  /api/admin/listings/bulk          -- bulk approve/reject
+
+Auto-reject: check title + description against
+settings.GetJSON("listings.banned_keywords")
+on every listing creation in backend/internal/listings/handler.go
+
+Reject reasons (required):
+prohibited_item | counterfeit | misleading |
+duplicate | incomplete | banned_keyword | other
+
+Frontend: admin/app/listings/moderation/page.tsx
+- Sidebar badge showing pending count
+- Card view: image, title, price, category, seller profile
+- One-click Approve / Reject / Request Edit
+- Bulk select + bulk action
+- Stats: "847 auto-approved today (keyword check passed)"
+
+### E. Real-Time Operations Health
+
+GET /api/admin/ops/health
+Returns:
+{
+  "api_latency_p95_ms": 145,
+  "db_connections": 23,
+  "redis_memory_mb": 512,
+  "active_auctions": 342,
+  "active_websocket_connections": 1204,
+  "job_queue_depth": 15,
+  "error_rate_1h": 0.002,
+  "last_payment_at": "2025-01-15T14:23:00Z"
+}
+
+GET  /api/admin/ops/jobs
+POST /api/admin/ops/jobs/:name/trigger
+
+Frontend: admin/app/ops/page.tsx
+- Live metrics auto-refresh every 30 seconds
+- Red alert if job_queue_depth > 100 or error_rate_1h > 0.01
+- Traffic sparkline: requests/min over last hour
+- Manual trigger buttons: "Run Expiry Check" | "Run Escrow Release"
+
+### F. GDPR & Compliance
+
+GET    /api/admin/compliance/gdpr/:user_id  -- full data export
+DELETE /api/admin/compliance/gdpr/:user_id  -- right to erasure
+GET    /api/admin/compliance/audit?action=user.ban&from=2025-01-01
+
+Frontend: admin/app/compliance/page.tsx
+- GDPR request queue
+- Generate ZIP of all user data | Execute deletion
+- Audit log viewer with full-text search
+- Export audit log as CSV for legal review</div>
+    <div class="copy-row">
+      <button class="copy-btn" onclick="cp('p3',this)">📋 نسخ Part 3</button>
+    </div>
+  </div>
+
+  <div id="v-p4" class="view">
+    <div class="prompt-box" id="p4">## LAYER 3 — FRONTEND STRUCTURE
+
+admin/
+├── app/
+│   ├── layout.tsx
+│   ├── login/page.tsx
+│   ├── dashboard/page.tsx       -- Founder P&L overview
+│   ├── analytics/page.tsx       -- Traffic Watch + GMV charts
+│   ├── listings/
+│   │   ├── page.tsx
+│   │   ├── moderation/page.tsx  -- Approval queue
+│   │   └── [id]/page.tsx
+│   ├── auctions/
+│   │   ├── page.tsx
+│   │   └── [id]/page.tsx
+│   ├── users/
+│   │   ├── page.tsx
+│   │   ├── kyc/page.tsx         -- KYC queue
+│   │   └── [id]/page.tsx
+│   ├── sellers/page.tsx         -- Seller hub + leaderboard
+│   ├── orders/page.tsx
+│   ├── disputes/
+│   │   ├── page.tsx
+│   │   └── [id]/page.tsx
+│   ├── trust/
+│   │   ├── page.tsx             -- Trust & Safety flags
+│   │   └── [id]/page.tsx
+│   ├── tickets/
+│   │   ├── page.tsx
+│   │   └── [id]/page.tsx
+│   ├── finance/
+│   │   ├── page.tsx
+│   │   └── payouts/page.tsx
+│   ├── categories/page.tsx
+│   ├── settings/
+│   │   ├── general/page.tsx
+│   │   ├── listings/page.tsx
+│   │   ├── auctions/page.tsx
+│   │   ├── search/page.tsx      -- Ranking weights (Cassini-style)
+│   │   ├── pricing/page.tsx     -- Fee schedule + live calculator
+│   │   ├── payments/page.tsx
+│   │   ├── shipping/page.tsx
+│   │   └── email/page.tsx
+│   ├── features/page.tsx        -- Feature flags (THE key page)
+│   ├── ops/page.tsx             -- Real-time health monitor
+│   └── compliance/page.tsx      -- GDPR + audit log
+├── components/
+│   ├── layout/
+│   │   ├── AdminSidebar.tsx     -- Data-driven: NAV_SECTIONS config array
+│   │   └── AdminHeader.tsx
+│   ├── settings/
+│   │   └── SettingField.tsx     -- Renders ANY setting by type:
+│   │                            --   bool   -> Toggle switch
+│   │                            --   string -> Text input
+│   │                            --   number -> Number input
+│   │                            --   select -> Dropdown
+│   │                            --   secret -> Masked + reveal button
+│   │                            --   json   -> JSON editor
+│   ├── features/
+│   │   └── FeatureFlagRow.tsx   -- Toggle + rollout % slider
+│   └── shared/
+│       ├── DataTable.tsx        -- Reusable sortable/filterable table
+│       ├── StatCard.tsx         -- Metric card
+│       └── ActionMenu.tsx       -- Row dropdown actions
+
+---
+
+## BUILD ORDER (follow exactly, do not skip any step)
+
+1.  Run ALL DB migrations:
+    settings, feature_flags, audit_log, tickets,
+    ticket_messages, trust_flags, kyc columns on users
+2.  Seed all default settings + all feature flags (enabled=false)
+3.  Build backend/internal/admin/settings/  -- Settings CRUD API
+4.  Build backend/internal/trust/rules.go   -- Fraud rule engine
+5.  Build all other admin handlers:
+    dashboard, users, listings_admin, auctions_admin,
+    disputes_admin, tickets, sellers, jobs, compliance
+6.  Build backend/internal/admin/middleware/admin_only.go
+7.  Register ALL admin routes in backend/cmd/api/main.go
+8.  Run: go build ./...  -- MUST PASS with zero errors before frontend
+9.  Create admin/ app: npx create-next-app@latest admin --typescript --tailwind --app
+10. Build SettingField.tsx + FeatureFlagRow.tsx (extensibility core — do first)
+11. Build AdminSidebar with NAV_SECTIONS config array (data-driven)
+12. Build pages in this order:
+    /login -> /dashboard -> /features -> /trust ->
+    /settings/general -> /settings/payments ->
+    /users -> /users/kyc -> /listings/moderation ->
+    /sellers -> /analytics -> /tickets ->
+    /ops -> /compliance -> remaining pages
+13. Run: npm run build in admin/  -- MUST PASS
+
+---
+
+## SECURITY RULES (Non-Negotiable)
+
+1. /api/admin/* requires JWT with role="admin"
+2. Rate limit /api/admin/*: 60 req/min (stricter than public API)
+3. is_secret=true fields masked as "••••••[last4]" in ALL GET responses
+4. Every admin action -> admin_audit_log row (zero exceptions)
+5. Admin sessions expire in 8 hours (shorter than user 30-day sessions)
+6. Admin app never uses same localStorage key as user-facing app
+7. 401 response -> clear token + redirect to /login immediately
+
+---
+
+## ACCEPTANCE CRITERIA
+
+Settings Engine:
+- [ ] All settings seeded with correct defaults
+- [ ] PUT site.on=false -> public site shows maintenance page instantly
+- [ ] Stripe SK masked as "••••••[last4]" in GET response
+- [ ] Insert new row in admin_settings -> appears in settings UI automatically
+- [ ] Insert new row in feature_flags -> appears in /features automatically
+
+Feature Flags:
+- [ ] Toggle feature.dutch_auction=true -> Dutch Auction appears in frontend
+- [ ] Set rollout_pct=10 -> only 10% of users see the feature
+- [ ] Add item to NAV_SECTIONS array -> appears in sidebar automatically
+
+Trust & Safety:
+- [ ] Create listing with banned keyword -> auto-rejected + reason logged
+- [ ] User places 21 bids in 1 hour -> trust_flag auto-created by rule engine
+- [ ] Ban user -> all JWTs invalidated + listings hidden + audit logged
+- [ ] Resolve flag -> admin_audit_log entry created with old/new values
+
+eBay Features:
+- [ ] /analytics shows real GMV, DAU, conversion funnel with real data
+- [ ] /settings/search change featured_boost -> affects listing order
+- [ ] /settings/pricing change platform_fee_pct -> calculator updates live
+- [ ] /sellers leaderboard shows dispute_rate per seller
+- [ ] /users/kyc approve -> user.kyc_status = "approved" in DB
+
+Operations:
+- [ ] /ops shows real API latency, DB connections, job queue depth
+- [ ] Manual job trigger -> job runs + log entry created
+- [ ] /compliance/gdpr/:id -> returns complete user data as JSON
+
+---
+
+## FINAL RULE — NON-NEGOTIABLE
+
+NEVER hardcode platform values in Go or React.
+
+BAD:  fee := 0.05
+GOOD: fee := settings.GetFloat("payments.platform_fee_pct") / 100
+
+BAD:  if user.reports > 5 { ban() }
+GOOD: threshold := settings.GetInt("trust.auto_ban_threshold")
+      if user.reports > threshold { ban() }
+
+BAD:  showDutchAuction := true
+GOOD: showDutchAuction := features.IsEnabled("feature.dutch_auction", userID)
+
+BAD:  maxImages := 10
+GOOD: maxImages := settings.GetInt("listings.max_images")
+
+This rule applies to EVERY value in the entire codebase.
+Any hardcoded business value = a bug.
+
+---
+
+After completing ALL steps:
+1. Mark TASK-026 [x] Done in TASKS.md
+2. Update Progress Tracker table
+3. Report all files created and modified
+4. Confirm all acceptance criteria are checked</div>
+    <div class="copy-row">
+      <button class="copy-btn" onclick="cp('p4',this)">📋 نسخ Part 4</button>
+      <button class="copy-all-btn" onclick="cpAll(this)">📋 نسخ الكل دفعة واحدة</button>
+    </div>
+    <p class="note">⚡ ابعت الـ 4 Parts لـ Cursor بالترتيب — كل Part في message منفصلة. لا تبعتهم كلهم دفعة واحدة.</p>
+  </div>
+
+  <div class="footer">GeoCore Next · Admin Dashboard Prompt · Generated by Claude</div>
+</div>
+<script>
+function sw(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('v-' + name).classList.add('active');
+}
+function cp(id, btn) {
+  const text = document.getElementById(id).innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ اتنسخ';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+  });
+}
+function cpAll(btn) {
+  const parts = ['p1','p2','p3','p4'].map(id => document.getElementById(id).innerText).join('\n\n---\n\n');
+  navigator.clipboard.writeText(parts).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ اتنسخ الكل';
+    setTimeout(() => { btn.textContent = orig; }, 2500);
+  });
+}
+</script>
+</body>
+</html>

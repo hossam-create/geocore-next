@@ -71,20 +71,28 @@ name: Deploy to Production
           run: |
             kubectl apply -f k8s/namespace.yaml
             kubectl apply -f k8s/configmap.yaml
+            kubectl apply -f k8s/zookeeper.yaml
+            kubectl apply -f k8s/kafka.yaml
+            kubectl apply -f k8s/redis.yaml
             kubectl apply -f k8s/backend-deployment.yaml
+            kubectl apply -f k8s/worker-deployment.yaml
+            kubectl apply -f k8s/hpa.yaml
+            kubectl apply -f k8s/pdb.yaml
+            kubectl apply -f k8s/network-policy.yaml
             kubectl apply -f k8s/ingress.yaml
 
         - name: Update image
           run: |
             IMAGE="ghcr.io/hossam-create/geocore-next/backend:sha-${{ github.sha }}"
             kubectl set image deployment/geocore-backend api=${IMAGE} -n geocore-prod
+            kubectl set image deployment/geocore-worker worker=${IMAGE} -n geocore-prod
 
         - name: Rollout status
           run: |
             kubectl rollout status deployment/geocore-backend -n geocore-prod --timeout=300s
+            kubectl rollout status deployment/geocore-worker -n geocore-prod --timeout=300s
 
         - name: Verify health
           run: |
             sleep 10
             curl -f https://api.geocore.app/health || exit 1
-  

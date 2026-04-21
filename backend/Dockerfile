@@ -1,16 +1,18 @@
-# Build stage
+# ── Build stage ──────────────────────────────────────────────────────────────
 FROM golang:1.23-alpine AS builder
 RUN apk add --no-cache git gcc musl-dev
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/api ./cmd/api
 
-# Run stage
-FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
+ARG BINARY=api
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/server ./cmd/${BINARY}
+
+# ── Distroless run stage ────────────────────────────────────────────────────
+FROM gcr.io/distroless/base-debian12:nonroot
 WORKDIR /app
-COPY --from=builder /bin/api .
+COPY --from=builder /bin/server .
+USER nonroot:nonroot
 EXPOSE 8080
-CMD ["./api"]
+ENTRYPOINT ["/app/server"]

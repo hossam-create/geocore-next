@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geocore-worker
+  namespace: geocore-prod
+  labels:
+    app: geocore-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: geocore-worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: geocore-worker
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: geocore-backend
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: worker
+          image: __ECR_REGISTRY__/geocore-worker:latest
+          command: ["./server"]
+          envFrom:
+            - configMapRef:
+                name: geocore-config
+            - secretRef:
+                name: geocore-secrets
+          env:
+            - name: WORKER_CONCURRENCY
+              value: "8"
+            - name: APP_MODE
+              value: "worker"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "800m"
+              memory: "512Mi"
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "geocore-api"]
+            initialDelaySeconds: 10
+            periodSeconds: 30

@@ -1,0 +1,110 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  test:
+    name: Test & Vet
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: geocore_test }
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.23" }
+      - run: cd backend && go mod download
+      - run: cd backend && go vet ./...
+      - run: cd backend && go test ./... -v -cover -timeout 120s
+        env: { DATABASE_URL: "postgres://postgres:postgres@localhost:5432/geocore_test?sslmode=disable" }
+
+  build:
+    name: Build & Push
+    runs-on: ubuntu-latest
+    needs: test
+    permissions: { id-token: write, contents: read }
+    strategy:
+      matrix:
+        binary: [api, worker, fraud-engine, saas-cp]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build & Push
+        env:
+          REG: ${{ steps.login-ecr.outputs.registry }}
+          TAG: ${{ github.sha }}
+          BIN: ${{ matrix.binary }}
+        run: |
+          docker build --build-arg BINARY=$BIN -t $REG/geocore-$BIN:$TAG -t $REG/geocore-$BIN:latest -f backend/Dockerfile backend/
+          docker push $REG/geocore-$BIN:$TAG
+          docker push $REG/geocore-$BIN:latest
+      - uses: aquasecurity/trivy-action@master
+        with: { image-ref: "${{ steps.login-ecr.outputs.registry }}/geocore-${{ matrix.binary }}:${{ github.sha }}", severity: "CRITICAL,HIGH", exit-code: "1" }
+        continue-on-error: true
+
+  gitops:
+    name: Update GitOps
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Push image tags to GitOps repo
+        env: { GITOPS_PAT: "${{ secrets.GITOPS_PAT }}" }
+        run: |
+          git clone https://x-access-token:${GITOPS_PAT}@${{ secrets.GITOPS_REPO }} gitops
+          cd gitops
+          for b in api worker fraud-engine saas-cp; do
+            sed -i "s|image:.*geocore-${b}.*|image: ${{ secrets.ECR_REGISTRY }}/geocore-${b}:${{ github.sha }}|g" k8s/${b}-deployment.yaml
+          done
+          git config user.name "GeoCore CI" && git config user.email "ci@geocore.app"
+          git commit -am "deploy: update images to ${{ github.sha }}" && git push
+
+  verify:
+    name: Post-Deploy Check
+    runs-on: ubuntu-latest
+    needs: gitops
+    steps:
+      - name: Wait + health check
+        run: |
+          sleep 60
+          for i in $(seq 1 10); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.API_URL }}/health/deploy" || true)
+            [ "$CODE" = "200" ] && echo "✅ Healthy" && exit 0
+            echo "⏳ Attempt $i — HTTP $CODE" && sleep 10
+          done
+          echo "❌ Unhealthy" && exit 1
+
+  rollback:
+    name: Auto Rollback
+    runs-on: ubuntu-latest
+    needs: verify
+    if: failure()
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Rollback all deployments
+        env: { KUBECONFIG: "${{ secrets.KUBECONFIG_B64 }}" }
+        run: |
+          echo "$KUBECONFIG" | base64 -d > /tmp/kubeconfig
+          export KUBECONFIG=/tmp/kubeconfig
+          for d in geocore-backend geocore-worker geocore-fraud-engine geocore-saas-cp; do
+            kubectl rollout undo deployment/$d -n geocore-prod || true
+          done

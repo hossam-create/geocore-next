@@ -7,8 +7,10 @@ import (
 	"gorm.io/gorm"
 )
 
-func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) *DutchAuctionManager {
 	h := NewHandler(db, rdb)
+	dm := NewDutchAuctionManager(db, rdb)
+	h.SetDutchManager(dm)
 
 	a := r.Group("/auctions")
 	{
@@ -22,9 +24,12 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
 		verified.Use(middleware.Auth(), middleware.EmailVerified(db))
 		{
 			verified.POST("", h.Create)
+			verified.PUT("/:id", h.Update)
 			verified.POST("/:id/bid", h.PlaceBid)
 			verified.POST("/:id/buy-now", h.BuyNow)
 			verified.POST("/:id/proxy-bid", h.SetProxyBid)
 		}
 	}
+
+	return dm
 }

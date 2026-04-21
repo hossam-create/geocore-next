@@ -1,80 +1,84 @@
 apiVersion: apps/v1
-  kind: Deployment
-  metadata:
-    name: geocore-backend
-    namespace: geocore-prod
-    labels:
+kind: Deployment
+metadata:
+  name: geocore-backend
+  namespace: geocore-prod
+  labels:
+    app: geocore-backend
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
       app: geocore-backend
-  spec:
-    replicas: 3
-    selector:
-      matchLabels:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
         app: geocore-backend
-    strategy:
-      type: RollingUpdate
-      rollingUpdate:
-        maxSurge: 1
-        maxUnavailable: 0
-    template:
-      metadata:
-        labels:
-          app: geocore-backend
-        annotations:
-          prometheus.io/scrape: "true"
-          prometheus.io/port: "8080"
-          prometheus.io/path: "/metrics"
-      spec:
-        serviceAccountName: geocore-backend
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-        containers:
-          - name: api
-            image: ghcr.io/hossam-create/geocore-next/backend:latest
-            ports:
-              - containerPort: 8080
-                name: http
-            envFrom:
-              - configMapRef:
-                  name: geocore-config
-              - secretRef:
-                  name: geocore-secrets
-            resources:
-              requests:
-                cpu: "250m"
-                memory: "256Mi"
-              limits:
-                cpu: "1000m"
-                memory: "512Mi"
-            livenessProbe:
-              httpGet:
-                path: /health
-                port: 8080
-              initialDelaySeconds: 15
-              periodSeconds: 20
-            readinessProbe:
-              httpGet:
-                path: /ready
-                port: 8080
-              initialDelaySeconds: 10
-              periodSeconds: 10
-  ---
-  apiVersion: v1
-  kind: Service
-  metadata:
-    name: geocore-backend-svc
-    namespace: geocore-prod
-  spec:
-    selector:
-      app: geocore-backend
-    ports:
-      - protocol: TCP
-        port: 80
-        targetPort: 8080
-  ---
-  apiVersion: v1
-  kind: ServiceAccount
-  metadata:
-    name: geocore-backend
-    namespace: geocore-prod
-  
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: geocore-backend
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: api
+          image: __ECR_REGISTRY__/geocore-api:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: geocore-config
+            - secretRef:
+                name: geocore-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: geocore-backend-svc
+  namespace: geocore-prod
+spec:
+  selector:
+    app: geocore-backend
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: geocore-backend
+  namespace: geocore-prod

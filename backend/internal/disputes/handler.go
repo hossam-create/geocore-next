@@ -1,17 +1,42 @@
 package disputes
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
+	"github.com/geocore-next/backend/internal/notifications"
+	"github.com/geocore-next/backend/pkg/events"
+	"github.com/geocore-next/backend/pkg/jobs"
+	"github.com/geocore-next/backend/pkg/kafka"
+	"github.com/geocore-next/backend/pkg/metrics"
 	"github.com/geocore-next/backend/pkg/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/stripe/stripe-go/v79"
+	"github.com/stripe/stripe-go/v79/refund"
 	"gorm.io/gorm"
 )
 
 type Handler struct {
 	db *gorm.DB
+}
+
+type orderRef struct {
+	ID              uuid.UUID
+	BuyerID         uuid.UUID
+	SellerID        uuid.UUID
+	Status          string
+	Total           float64
+	Currency        string
+	PaymentIntentID string
+}
+
+type paymentRef struct {
+	ID                    uuid.UUID
+	StripePaymentIntentID string
 }
 
 func NewHandler(db *gorm.DB) *Handler {
@@ -23,14 +48,9 @@ func (h *Handler) CreateDispute(c *gin.Context) {
 	userID, _ := uuid.Parse(c.MustGet("user_id").(string))
 
 	var req struct {
-		OrderID     *string       `json:"order_id"`
-		AuctionID   *string       `json:"auction_id"`
-		EscrowID    *string       `json:"escrow_id"`
-		SellerID    string        `json:"seller_id" binding:"required"`
-		Reason      DisputeReason `json:"reason" binding:"required"`
-		Description string        `json:"description" binding:"required,min=20"`
-		Amount      float64       `json:"amount" binding:"required,min=0"`
-		Currency    string        `json:"currency"`
+		OrderID  string        `json:"order_id" binding:"required"`
+		Reason   DisputeReason `json:"reason" binding:"required"`
+		Evidence string        `json:"evidence" binding:"required,min=20"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -38,53 +58,98 @@ func (h *Handler) CreateDispute(c *gin.Context) {
 		return
 	}
 
-	sellerID, err := uuid.Parse(req.SellerID)
+	orderID, err := uuid.Parse(req.OrderID)
 	if err != nil {
-		response.BadRequest(c, "Invalid seller ID")
+		response.BadRequest(c, "Invalid order ID")
 		return
 	}
 
-	if sellerID == userID {
-		response.BadRequest(c, "Cannot open dispute against yourself")
+	var ord orderRef
+	if err := h.db.Table("orders").
+		Select("id, buyer_id, seller_id, status, total, currency, payment_intent_id").
+		Where("id = ?", orderID).
+		First(&ord).Error; err != nil {
+		response.NotFound(c, "Order")
+		return
+	}
+
+	if ord.BuyerID != userID {
+		response.Forbidden(c)
+		return
+	}
+	if ord.Status == "cancelled" {
+		response.BadRequest(c, "Cannot dispute a cancelled order")
+		return
+	}
+
+	var existing int64
+	h.db.Model(&Dispute{}).Where("order_id = ? AND status IN ?", ord.ID, []DisputeStatus{StatusOpen, StatusUnderReview, StatusEscalated, StatusAwaitingResponse}).Count(&existing)
+	if existing > 0 {
+		response.BadRequest(c, "An active dispute already exists for this order")
 		return
 	}
 
 	dispute := Dispute{
 		ID:          uuid.New(),
 		BuyerID:     userID,
-		SellerID:    sellerID,
+		SellerID:    ord.SellerID,
+		OrderID:     &ord.ID,
 		Reason:      req.Reason,
-		Description: req.Description,
-		Amount:      req.Amount,
-		Currency:    defaultStr(req.Currency, "USD"),
+		Description: req.Evidence,
+		Amount:      ord.Total,
+		Currency:    defaultStr(ord.Currency, "USD"),
 		Status:      StatusOpen,
 		Priority:    5,
 	}
 
-	if req.OrderID != nil {
-		id, _ := uuid.Parse(*req.OrderID)
-		dispute.OrderID = &id
-	}
-	if req.AuctionID != nil {
-		id, _ := uuid.Parse(*req.AuctionID)
-		dispute.AuctionID = &id
-	}
-	if req.EscrowID != nil {
-		id, _ := uuid.Parse(*req.EscrowID)
-		dispute.EscrowID = &id
-	}
-
-	// Set response deadline (48 hours)
-	deadline := time.Now().Add(48 * time.Hour)
-	dispute.ResponseDeadline = &deadline
+	responseHrs, resolutionHrs := slaHoursForPriority(dispute.Priority)
+	responseDeadline := time.Now().Add(time.Duration(responseHrs) * time.Hour)
+	resolutionDeadline := time.Now().Add(time.Duration(resolutionHrs) * time.Hour)
+	dispute.ResponseDeadline = &responseDeadline
+	dispute.ResolutionDeadline = &resolutionDeadline
 
 	if err := h.db.Create(&dispute).Error; err != nil {
 		response.InternalError(c, err)
 		return
 	}
 
+	// Mark order as disputed while dispute is open.
+	h.db.Table("orders").Where("id = ?", ord.ID).Update("status", "disputed")
+
 	// Log activity
 	h.logActivity(dispute.ID, userID, "dispute_opened", "Dispute opened by buyer")
+
+	// Publish domain event for in-process consumers
+	events.Publish(events.Event{
+		Type: events.EventDisputeOpened,
+		Payload: map[string]interface{}{
+			"dispute_id":    dispute.ID.String(),
+			"order_id":      ord.ID.String(),
+			"buyer_id":      userID.String(),
+			"seller_id":     ord.SellerID.String(),
+			"reason":        string(req.Reason),
+			"amount":        ord.Total,
+			"currency":      ord.Currency,
+			"respondent_id": ord.SellerID.String(),
+		},
+	})
+
+	// Transactional outbox for Kafka delivery
+	_ = kafka.WriteOutbox(h.db, kafka.TopicModeration, kafka.New(
+		"dispute.opened",
+		dispute.ID.String(),
+		"dispute",
+		kafka.Actor{Type: "user", ID: userID.String()},
+		map[string]interface{}{
+			"dispute_id":    dispute.ID.String(),
+			"order_id":      ord.ID.String(),
+			"buyer_id":      userID.String(),
+			"seller_id":     ord.SellerID.String(),
+			"reason":        string(req.Reason),
+			"respondent_id": ord.SellerID.String(),
+		},
+		kafka.EventMeta{Source: "api-service"},
+	))
 
 	response.Created(c, dispute)
 }
@@ -277,9 +342,8 @@ func (h *Handler) ResolveDispute(c *gin.Context) {
 	}
 
 	var req struct {
-		Resolution       ResolutionType `json:"resolution" binding:"required"`
-		ResolutionAmount *float64       `json:"resolution_amount"`
-		ResolutionNotes  string         `json:"resolution_notes"`
+		Outcome string `json:"outcome" binding:"required,oneof=refund_buyer release_seller"`
+		Notes   string `json:"notes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
@@ -298,16 +362,19 @@ func (h *Handler) ResolveDispute(c *gin.Context) {
 	}
 
 	now := time.Now()
-	updates := map[string]interface{}{
-		"status":           StatusResolved,
-		"resolution":       req.Resolution,
-		"resolution_notes": req.ResolutionNotes,
-		"resolved_by":      adminID,
-		"resolved_at":      now,
+	var mappedResolution ResolutionType
+	if req.Outcome == "refund_buyer" {
+		mappedResolution = ResolutionFullRefund
+	} else {
+		mappedResolution = ResolutionNoRefund
 	}
 
-	if req.ResolutionAmount != nil {
-		updates["resolution_amount"] = *req.ResolutionAmount
+	updates := map[string]interface{}{
+		"status":           StatusResolved,
+		"resolution":       mappedResolution,
+		"resolution_notes": req.Notes,
+		"resolved_by":      adminID,
+		"resolved_at":      now,
 	}
 
 	if err := h.db.Model(&dispute).Updates(updates).Error; err != nil {
@@ -315,17 +382,81 @@ func (h *Handler) ResolveDispute(c *gin.Context) {
 		return
 	}
 
-	h.logActivity(disputeID, adminID, "dispute_resolved", string(req.Resolution))
+	if dispute.OrderID == nil {
+		response.BadRequest(c, "Resolve flow currently requires order-linked dispute")
+		return
+	}
 
-	// TODO: Process refund/release based on resolution
-	// - If full_refund: Release escrow to buyer
-	// - If no_refund: Release escrow to seller
-	// - If partial_refund: Split escrow
+	var ord orderRef
+	if err := h.db.Table("orders").
+		Select("id, buyer_id, seller_id, status, total, currency, payment_intent_id").
+		Where("id = ?", *dispute.OrderID).
+		First(&ord).Error; err != nil {
+		response.NotFound(c, "Order")
+		return
+	}
+
+	switch req.Outcome {
+	case "refund_buyer":
+		if err := h.refundBuyerForOrder(c.Request.Context(), ord); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		h.db.Table("orders").Where("id = ?", ord.ID).Update("status", "refunded")
+
+	case "release_seller":
+		if err := h.releaseEscrowForOrder(c.Request.Context(), ord); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		h.db.Table("orders").Where("id = ?", ord.ID).Update("status", "completed")
+	}
+
+	h.logActivity(disputeID, adminID, "dispute_resolved", req.Outcome)
 
 	response.OK(c, gin.H{
 		"message":    "Dispute resolved",
-		"resolution": req.Resolution,
+		"resolution": req.Outcome,
 	})
+}
+
+func (h *Handler) refundBuyerForOrder(ctx context.Context, ord orderRef) error {
+	if ord.PaymentIntentID == "" {
+		return fmt.Errorf("order has no payment_intent_id")
+	}
+
+	params := &stripe.RefundParams{
+		PaymentIntent: stripe.String(ord.PaymentIntentID),
+		Reason:        stripe.String("requested_by_customer"),
+	}
+	if _, err := refund.New(params); err != nil {
+		return fmt.Errorf("stripe refund failed: %w", err)
+	}
+
+	return h.db.Table("payments").
+		Where("stripe_payment_intent_id = ?", ord.PaymentIntentID).
+		Updates(map[string]interface{}{"status": "refunded", "refunded_at": time.Now()}).Error
+}
+
+func (h *Handler) releaseEscrowForOrder(ctx context.Context, ord orderRef) error {
+	if ord.PaymentIntentID == "" {
+		return fmt.Errorf("order has no payment_intent_id")
+	}
+
+	var p paymentRef
+	if err := h.db.Table("payments").
+		Select("id, stripe_payment_intent_id").
+		Where("stripe_payment_intent_id = ?", ord.PaymentIntentID).
+		First(&p).Error; err != nil {
+		return fmt.Errorf("payment not found for order: %w", err)
+	}
+
+	deps := jobs.HandlerDependencies{DB: h.db}
+	job := &jobs.Job{
+		Type:    jobs.JobTypeEscrowRelease,
+		Payload: map[string]interface{}{"payment_id": p.ID.String()},
+	}
+	return deps.HandleEscrowRelease(ctx, job)
 }
 
 // EscalateDispute escalates a dispute (buyer only)
@@ -486,4 +617,74 @@ func defaultStr(s, d string) string {
 		return d
 	}
 	return s
+}
+
+func slaHoursForPriority(priority int) (responseHours int, resolutionHours int) {
+	switch {
+	case priority <= 2:
+		return 12, 24
+	case priority <= 4:
+		return 24, 48
+	default:
+		return 36, 72
+	}
+}
+
+func (h *Handler) MarkSLABreaches() (int64, error) {
+	now := time.Now()
+	var breached []Dispute
+	if err := h.db.
+		Where("sla_breached = ? AND status <> ? AND resolution_deadline IS NOT NULL AND resolution_deadline < ?", false, StatusResolved, now).
+		Find(&breached).Error; err != nil {
+		return 0, err
+	}
+
+	for _, d := range breached {
+		h.db.Model(&Dispute{}).Where("id = ?", d.ID).Update("sla_breached", true)
+		metrics.IncDisputesSLABreachedTotal()
+		h.logActivity(d.ID, d.BuyerID, "sla_breached", "Resolution SLA breached")
+		h.db.Create(&notifications.Notification{
+			UserID: d.BuyerID,
+			Type:   "dispute_sla_breached",
+			Title:  "Dispute SLA Breached",
+			Body:   "Your dispute exceeded resolution SLA and was escalated.",
+			Data:   fmt.Sprintf(`{"dispute_id":"%s"}`, d.ID.String()),
+		})
+		slog.Error("dispute SLA breached",
+			"severity", "CRITICAL",
+			"dispute_id", d.ID.String(),
+		)
+	}
+
+	return int64(len(breached)), nil
+}
+
+func StartSLAWorker(db *gorm.DB, notifSvc any) {
+	h := NewHandler(db)
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if _, err := markSLABreachesWithRetry(h, 3); err != nil {
+				slog.Error("dispute SLA worker failed", "error", err.Error())
+			}
+			_ = notifSvc
+		}
+	}()
+}
+
+func markSLABreachesWithRetry(h *Handler, maxRetries int) (int64, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		count, err := h.MarkSLABreaches()
+		if err == nil {
+			return count, nil
+		}
+		lastErr = err
+		if attempt < maxRetries {
+			backoff := time.Duration(1<<(attempt-1)) * time.Second
+			time.Sleep(backoff)
+		}
+	}
+	return 0, lastErr
 }

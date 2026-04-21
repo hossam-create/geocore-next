@@ -1,0 +1,107 @@
+# Canary release — progressive traffic shift to new version
+# Weight progression: 10% → 25% → 50% → 100% (automated by CanaryStepper)
+# Rollback: kubectl delete -f api-canary.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geocore-backend-canary
+  namespace: geocore-prod
+  labels:
+    app: geocore-backend
+    track: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: geocore-backend
+      track: canary
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: geocore-backend
+        track: canary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: geocore-backend
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: api
+          image: __ECR_REGISTRY__/geocore-api:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: geocore-config
+            - secretRef:
+                name: geocore-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: geocore-backend-canary-svc
+  namespace: geocore-prod
+spec:
+  selector:
+    app: geocore-backend
+    track: canary
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-canary
+  namespace: geocore-prod
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "10"
+spec:
+  rules:
+    - host: api.geocore.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: geocore-backend-canary-svc
+                port:
+                  number: 80

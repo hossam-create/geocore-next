@@ -9,11 +9,18 @@ import (
 
 func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
 	h := NewHandler(db, rdb)
+
 	users := r.Group("/users")
 	{
 		users.GET("/:id/profile", h.GetProfile)
+		users.GET("/:id/reputation", h.GetReputation)
 		users.Use(middleware.Auth())
 		users.GET("/me", h.GetMe)
 		users.PUT("/me", h.UpdateMe)
+		users.GET("/me/reputation", h.GetMyReputation)
+		users.GET("/me/notification-preferences", h.GetNotificationPreferences)
+		users.PATCH("/me/notification-preferences", h.UpdateNotificationPreferences)
 	}
+
+	// GDPR / Privacy endpoints are registered in internal/compliance/routes.go
 }

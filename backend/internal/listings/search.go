@@ -22,6 +22,7 @@ type SearchRequest struct {
 	Query        string   `form:"q"`
 	CategoryID   string   `form:"category_id"`
 	CategorySlug string   `form:"category"`
+	CategoryPath string   `form:"category_path"` // includes descendants (prefix match)
 	MinPrice     *float64 `form:"min_price"`
 	MaxPrice     *float64 `form:"max_price"`
 	Condition    string   `form:"condition"` // new | used | refurbished
@@ -61,13 +62,14 @@ type SearchFacets struct {
 }
 
 type SearchResponse struct {
-	Results []Listing    `json:"results"`
-	Total   int64        `json:"total"`
-	Page    int          `json:"page"`
-	PerPage int          `json:"per_page"`
-	Pages   int64        `json:"pages"`
-	Facets  SearchFacets `json:"facets"`
-	Cached  bool         `json:"cached,omitempty"`
+	Results     []Listing    `json:"results"`
+	Total       int64        `json:"total"`
+	Page        int          `json:"page"`
+	PerPage     int          `json:"per_page"`
+	Pages       int64        `json:"pages"`
+	Facets      SearchFacets `json:"facets"`
+	LiveResults []LiveResult `json:"live_results,omitempty"` // Sprint 18: live-session discovery
+	Cached      bool         `json:"cached,omitempty"`
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -75,6 +77,10 @@ type SearchResponse struct {
 // ════════════════════════════════════════════════════════════════════════════
 
 func (h *Handler) Search(c *gin.Context) {
+	if !searchFlagEnabled() {
+		response.OK(c, SearchResponse{Results: []Listing{}, Total: 0, Page: 1, PerPage: 0})
+		return
+	}
 	var req SearchRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		response.BadRequest(c, err.Error())
@@ -119,6 +125,26 @@ func (h *Handler) Search(c *gin.Context) {
 		Where("listings.status = ?", "active").
 		Where("(listings.expires_at IS NULL OR listings.expires_at > NOW())")
 
+	// ── Boost score subquery: active boosts add to ranking ────────────────────
+	boostSubquery := `(SELECT COALESCE(SUM(lb.boost_score),0) FROM listing_boosts lb WHERE lb.listing_id = listings.id AND lb.expires_at > NOW())`
+	// ── Reputation subquery: seller reputation adds to ranking ──────────────
+	repSubquery := `(SELECT COALESCE(score,50) FROM user_reputations ur WHERE ur.user_id = listings.user_id AND ur.role='seller' LIMIT 1)`
+	// ── Sprint 18.1: Live boost — seller has an active live session boosts all their listings.
+	// Takes the max boost_score across concurrent live sessions of the same host.
+	liveBoostSubquery := `(SELECT COALESCE(MAX(ls.boost_score), 0) FROM livestream_sessions ls
+		WHERE ls.host_id = listings.user_id AND ls.status = 'live' AND ls.deleted_at IS NULL)`
+	// ── Sprint 18.1: Urgency score — recent view velocity (last 24h) as a trend signal.
+	// Caps contribution at 50 to prevent a single viral item from dominating.
+	urgencySubquery := `(SELECT LEAST(COUNT(*), 50) FROM listing_views lv
+		WHERE lv.listing_id = listings.id AND lv.viewed_at > NOW() - INTERVAL '24 hours')`
+	q = q.Select(
+		"listings.*, " +
+			boostSubquery + " AS boost_score, " +
+			repSubquery + " AS rep_score, " +
+			liveBoostSubquery + " AS live_boost, " +
+			urgencySubquery + " AS urgency_score",
+	)
+
 	// Full-text search using PostgreSQL tsvector
 	if req.Query != "" {
 		q = q.Where(
@@ -130,6 +156,12 @@ func (h *Handler) Search(c *gin.Context) {
 	// Filters
 	if req.CategoryID != "" {
 		q = q.Where("listings.category_id = ?", req.CategoryID)
+	} else if req.CategoryPath != "" {
+		// Include descendants: any category whose path starts with req.CategoryPath
+		q = q.Where(
+			"listings.category_id IN (SELECT id FROM categories WHERE path = ? OR path LIKE ?)",
+			req.CategoryPath, req.CategoryPath+"/%",
+		)
 	} else if req.CategorySlug != "" {
 		q = q.Where("listings.category_id = (SELECT id FROM categories WHERE slug = ? LIMIT 1)", req.CategorySlug)
 	}
@@ -172,20 +204,23 @@ func (h *Handler) Search(c *gin.Context) {
 	q.Count(&total)
 
 	// ── Sorting ───────────────────────────────────────────────────────────────
+	// Sprint 18.1 — prefix every sort with boost_score + live_boost + rep_score + urgency_score
+	// so monetization + reputation + real-time momentum always win at parity.
+	const rankPrefix = "boost_score DESC, live_boost DESC, rep_score DESC, urgency_score DESC"
 	switch req.SortBy {
 	case "price_asc":
-		q = q.Order("listings.price ASC NULLS LAST")
+		q = q.Order(rankPrefix + ", listings.price ASC NULLS LAST")
 	case "price_desc":
-		q = q.Order("listings.price DESC NULLS LAST")
+		q = q.Order(rankPrefix + ", listings.price DESC NULLS LAST")
 	case "relevance":
 		if req.Query != "" {
 			rankExpr := fmt.Sprintf(
 				"ts_rank(to_tsvector('english', listings.title || ' ' || COALESCE(listings.description, '')), plainto_tsquery('english', '%s')) DESC",
 				strings.ReplaceAll(req.Query, "'", "''"),
 			)
-			q = q.Order(rankExpr)
+			q = q.Order(rankPrefix + ", " + rankExpr)
 		} else {
-			q = q.Order("listings.is_featured DESC, listings.created_at DESC")
+			q = q.Order(rankPrefix + ", listings.is_featured DESC, listings.created_at DESC")
 		}
 	case "distance":
 		if req.Lat != nil && req.Lng != nil {
@@ -193,12 +228,12 @@ func (h *Handler) Search(c *gin.Context) {
 				"6371 * acos(cos(radians(%f)) * cos(radians(listings.latitude)) * cos(radians(listings.longitude) - radians(%f)) + sin(radians(%f)) * sin(radians(listings.latitude)))",
 				*req.Lat, *req.Lng, *req.Lat,
 			)
-			q = q.Order(distExpr + " ASC NULLS LAST")
+			q = q.Order(rankPrefix + ", " + distExpr + " ASC NULLS LAST")
 		} else {
-			q = q.Order("listings.created_at DESC")
+			q = q.Order(rankPrefix + ", listings.created_at DESC")
 		}
 	default: // "date"
-		q = q.Order("listings.is_featured DESC, listings.created_at DESC")
+		q = q.Order(rankPrefix + ", listings.is_featured DESC, listings.created_at DESC")
 	}
 
 	// ── Paginate + fetch ──────────────────────────────────────────────────────
@@ -228,9 +263,16 @@ func (h *Handler) Search(c *gin.Context) {
 		Facets:  facets,
 	}
 
+	// Sprint 18 — inject matching live sessions at the top of results (non-blocking if fails).
+	if req.Page == 1 {
+		if live := h.findMatchingLiveSessions(c.Request.Context(), req.Query, 5); len(live) > 0 {
+			sr.LiveResults = live
+		}
+	}
+
 	if h.rdb != nil {
 		if data, err := json.Marshal(sr); err == nil {
-			h.rdb.Set(context.Background(), cacheKey, data, 5*time.Minute)
+			h.rdb.Set(context.Background(), cacheKey, data, 2*time.Minute)
 		}
 	}
 
@@ -241,38 +283,100 @@ func (h *Handler) Search(c *gin.Context) {
 // GET /api/v1/listings/suggestions?q=iphone — autocomplete
 // ════════════════════════════════════════════════════════════════════════════
 
+// SuggestCategory is a slim category summary for the autocomplete dropdown.
+type SuggestCategory struct {
+	ID     string `json:"id"`
+	Slug   string `json:"slug"`
+	NameEn string `json:"name_en"`
+	NameAr string `json:"name_ar,omitempty"`
+	Icon   string `json:"icon,omitempty"`
+}
+
+// SuggestTrending is a popular recent query.
+type SuggestTrending struct {
+	Query string `json:"query"`
+	Count int    `json:"count"`
+}
+
+// SuggestResponse is the Amazon-style autocomplete bundle.
+type SuggestResponse struct {
+	Listings   []string          `json:"listings"`
+	Categories []SuggestCategory `json:"categories"`
+	Live       []LiveResult      `json:"live"`
+	Trending   []SuggestTrending `json:"trending"`
+}
+
 func (h *Handler) Suggestions(c *gin.Context) {
+	if !autocompleteFlagEnabled() {
+		response.OK(c, SuggestResponse{})
+		return
+	}
 	q := strings.TrimSpace(c.Query("q"))
 	if len(q) < 2 {
-		response.OK(c, gin.H{"suggestions": []string{}})
+		response.OK(c, SuggestResponse{})
 		return
 	}
 
-	cacheKey := "suggest:" + q
+	cacheKey := "suggest:v2:" + strings.ToLower(q)
 	if h.rdb != nil {
 		if cached, err := h.rdb.Get(context.Background(), cacheKey).Bytes(); err == nil {
-			var out []string
+			var out SuggestResponse
 			if json.Unmarshal(cached, &out) == nil {
-				response.OK(c, gin.H{"suggestions": out})
+				response.OK(c, out)
 				return
 			}
 		}
 	}
 
-	var titles []string
+	like := "%" + q + "%"
+	out := SuggestResponse{
+		Listings:   []string{},
+		Categories: []SuggestCategory{},
+		Live:       []LiveResult{},
+		Trending:   []SuggestTrending{},
+	}
+
+	// Listings (by title, top-viewed first)
 	h.db.Model(&Listing{}).
-		Where("status = ? AND title ILIKE ?", "active", "%"+q+"%").
+		Where("status = ? AND title ILIKE ?", "active", like).
 		Order("view_count DESC, created_at DESC").
 		Limit(10).
-		Pluck("DISTINCT title", &titles)
+		Pluck("DISTINCT title", &out.Listings)
+
+	// Categories (ILIKE on name_en / name_ar / slug)
+	var cats []SuggestCategory
+	h.db.Table("categories").
+		Select("id, slug, name_en, name_ar, icon").
+		Where("is_active = true AND (name_en ILIKE ? OR name_ar ILIKE ? OR slug ILIKE ?)", like, like, like).
+		Order("sort_order ASC, name_en ASC").
+		Limit(5).
+		Scan(&cats)
+	out.Categories = cats
+
+	// Live sessions (short-timeout, non-blocking)
+	if live := h.findMatchingLiveSessions(c.Request.Context(), q, 3); live != nil {
+		out.Live = live
+	}
+
+	// Trending from search_queries (last 7d), prefix match
+	var trending []SuggestTrending
+	h.db.Raw(`
+		SELECT query, COUNT(*) as count
+		FROM search_queries
+		WHERE created_at > NOW() - INTERVAL '7 days'
+		  AND query ILIKE ?
+		GROUP BY query
+		ORDER BY count DESC
+		LIMIT 5`, like).Scan(&trending)
+	out.Trending = trending
 
 	if h.rdb != nil {
-		if data, _ := json.Marshal(titles); data != nil {
+		if data, _ := json.Marshal(out); data != nil {
 			h.rdb.Set(context.Background(), cacheKey, data, 5*time.Minute)
 		}
 	}
 
-	response.OK(c, gin.H{"suggestions": titles})
+	response.OK(c, out)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -400,6 +504,10 @@ func ApplySearchIndexes(db *gorm.DB) {
 		`CREATE INDEX IF NOT EXISTS idx_listings_geo      ON listings(latitude, longitude)`,
 		`CREATE INDEX IF NOT EXISTS idx_listings_city     ON listings(city)`,
 		`CREATE INDEX IF NOT EXISTS idx_listings_country  ON listings(country)`,
+		// Sprint 18.1 — support ranking subqueries
+		`CREATE INDEX IF NOT EXISTS idx_livesessions_host_status ON livestream_sessions(host_id, status) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_listingviews_listing_viewed ON listing_views(listing_id, viewed_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_categories_path ON categories(path)`,
 	}
 	for _, idx := range indexes {
 		if err := db.Exec(idx).Error; err != nil {

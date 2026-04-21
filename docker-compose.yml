@@ -1,91 +1,267 @@
-version: '3.9'
+version: "3.9"
 
 services:
 
-  api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.dev
-    ports:
-      - "8080:8080"
-    environment:
-      APP_ENV: development
-      PORT: "8080"
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_USER: geocore
-      DB_PASSWORD: geocore_secret
-      DB_NAME: geocore_dev
-      DB_SSLMODE: disable
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      JWT_SECRET: dev_secret_geocore_next_32_chars_min
-      FRONTEND_URL: http://localhost:3000
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
-    volumes:
-      - ./backend:/app
-      - go_cache:/go/pkg/mod
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    networks: [net]
-
+  # =========================
+  # DATABASE
+  # =========================
   postgres:
     image: postgis/postgis:16-3.4-alpine
+    container_name: geocore-postgres
+    restart: always
     environment:
       POSTGRES_USER: geocore
       POSTGRES_PASSWORD: geocore_secret
-      POSTGRES_DB: geocore_dev
+      POSTGRES_DB: geocore
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U geocore -d geocore_dev"]
+      test: ["CMD-SHELL", "pg_isready -U geocore -d geocore"]
       interval: 5s
       timeout: 5s
       retries: 10
-    networks: [net]
+    networks:
+      - geocore-net
 
   redis:
     image: redis:7-alpine
+    container_name: geocore-redis
+    restart: always
     ports:
       - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 5
-    networks: [net]
+    networks:
+      - geocore-net
 
-  meilisearch:
-    image: getmeili/meilisearch:v1.10
-    ports:
-      - "7700:7700"
+  # =========================
+  # KAFKA STACK
+  # =========================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: geocore-zookeeper
+    restart: always
     environment:
-      MEILI_MASTER_KEY: dev_meili_key
-      MEILI_ENV: development
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
     volumes:
-      - meili_data:/meili_data
-    networks: [net]
+      - zk_data:/var/lib/zookeeper/data
+      - zk_logs:/var/lib/zookeeper/log
+    networks:
+      - geocore-net
 
-  adminer:
-    image: adminer:latest
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: geocore-kafka
+    restart: always
+    depends_on:
+      - zookeeper
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "6"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list > /dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - geocore-net
+
+  # ── Kafka topic bootstrap (runs once, then exits) ────────────────────────────
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: geocore-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      for topic in \
+        orders.events wallet.events escrow.events payments.events \
+        users.events fraud.events moderation.events shipping.events notifications.events \
+        orders.events.dlq wallet.events.dlq escrow.events.dlq payments.events.dlq \
+        users.events.dlq fraud.events.dlq moderation.events.dlq shipping.events.dlq notifications.events.dlq; do
+          kafka-topics --bootstrap-server kafka:9092 \
+            --create --if-not-exists \
+            --topic $$topic \
+            --partitions 6 \
+            --replication-factor 1
+      done
+      echo "All Kafka topics created"
+    networks:
+      - geocore-net
+    restart: "no"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: geocore-kafka-ui
+    restart: always
+    depends_on:
+      - kafka
     ports:
       - "8081:8080"
-    depends_on: [postgres]
-    networks: [net]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - geocore-net
+
+  # =========================
+  # SEARCH ENGINE
+  # =========================
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    container_name: geocore-meilisearch
+    restart: always
+    environment:
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY: geocore_master_key
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+    networks:
+      - geocore-net
+
+  # =========================
+  # BACKEND API
+  # =========================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: geocore-api
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      PORT: "8080"
+
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: geocore
+      DB_PASSWORD: geocore_secret
+      DB_NAME: geocore
+      DB_SSLMODE: disable
+      DATABASE_URL: postgres://geocore:geocore_secret@postgres:5432/geocore?sslmode=disable
+
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+
+      KAFKA_BROKERS: kafka:9092
+
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_KEY: geocore_master_key
+
+      JWT_SECRET: dev_secret_geocore_next_32_chars_min
+      FRONTEND_URL: http://localhost:3000
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
+    volumes:
+      - ./backend:/app
+      - go_cache:/go/pkg/mod
+    ports:
+      - "8080:8080"
+    networks:
+      - geocore-net
+
+  # =========================
+  # ASYNQ WORKER
+  # =========================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: geocore-worker
+    restart: always
+    command: ["./geocore-api", "--mode=worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      APP_MODE: worker
+
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: geocore
+      DB_PASSWORD: geocore_secret
+      DB_NAME: geocore
+      DB_SSLMODE: disable
+      DATABASE_URL: postgres://geocore:geocore_secret@postgres:5432/geocore?sslmode=disable
+
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+
+      KAFKA_BROKERS: kafka:9092
+
+      JWT_SECRET: dev_secret_geocore_next_32_chars_min
+    volumes:
+      - ./backend:/app
+      - go_cache:/go/pkg/mod
+    networks:
+      - geocore-net
+
+  # =========================
+  # ADMIN DB TOOL
+  # =========================
+  adminer:
+    image: adminer:latest
+    container_name: geocore-adminer
+    restart: always
+    ports:
+      - "8082:8080"
+    depends_on:
+      - postgres
+    networks:
+      - geocore-net
+
+# =========================
+# NETWORK + VOLUMES
+# =========================
+networks:
+  geocore-net:
+    driver: bridge
 
 volumes:
   pg_data:
   redis_data:
   meili_data:
   go_cache:
-
-networks:
-  net:
-    driver: bridge
+  kafka_data:
+  zk_data:
+  zk_logs:

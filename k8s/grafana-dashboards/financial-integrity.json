@@ -1,0 +1,72 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "🔴 Wallet Invariant Violations (MUST BE ZERO)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+      "targets": [{ "expr": "wallet_invariant_violation", "legendFormat": "violations" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] }
+    },
+    {
+      "title": "🔴 Escrow Mismatch",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+      "targets": [{ "expr": "reconcile_mismatch", "legendFormat": "mismatches" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "title": "🔴 Idempotency Conflicts",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+      "targets": [{ "expr": "wallet_ops_total{operation=\"idempotency_hit\"}", "legendFormat": "conflicts" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 10 }, { "color": "red", "value": 50 }] } } }
+    },
+    {
+      "title": "Wallet Operations by Type",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [{ "expr": "rate(wallet_ops_total{status=\"success\"}[5m])", "legendFormat": "{{operation}}" }],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 10 } } }
+    },
+    {
+      "title": "Escrow Lifecycle Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [{ "expr": "histogram_quantile(0.95, rate(escrow_lifecycle_seconds_bucket[5m]))", "legendFormat": "p95 lifecycle" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Reconciliation Drift",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [{ "expr": "rate(reconcile_mismatch[1h])", "legendFormat": "drift/hr" }],
+      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 30 }, "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }] } } }
+    },
+    {
+      "title": "Failed Escrow Releases",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 12 },
+      "targets": [{ "expr": "wallet_ops_total{operation=\"release_escrow\",status=\"error\"}", "legendFormat": "failed releases" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "title": "Double Spend Attempts",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 16 },
+      "targets": [{ "expr": "wallet_ops_total{operation=\"idempotency_hit\",status=\"success\"}", "legendFormat": "idempotency hits" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["geocore", "finance", "critical"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "GeoCore — Financial Integrity 🔴",
+  "uid": "geocore-finance"
+}

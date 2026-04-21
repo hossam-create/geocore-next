@@ -15,6 +15,7 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB) {
 		d.POST("", h.CreateDispute)
 		d.GET("", h.ListDisputes)
 		d.GET("/:id", h.GetDispute)
+		d.PATCH("/:id/resolve", middleware.AdminWithDB(db), h.ResolveDispute)
 		d.POST("/:id/messages", h.AddMessage)
 		d.POST("/:id/evidence", h.AddEvidence)
 		d.POST("/:id/escalate", h.EscalateDispute)
@@ -24,7 +25,7 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB) {
 
 	// Admin routes
 	admin := r.Group("/admin/disputes")
-	admin.Use(middleware.Auth(), middleware.AdminOnly())
+	admin.Use(middleware.Auth(), middleware.AdminWithDB(db))
 	{
 		admin.GET("", h.AdminListDisputes)
 		admin.POST("/:id/assign", h.AdminAssignDispute)

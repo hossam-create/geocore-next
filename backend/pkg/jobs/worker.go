@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
+	"github.com/geocore-next/backend/pkg/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -14,16 +16,21 @@ import (
 type JobType string
 
 const (
-	JobTypeEmail           JobType = "email"
-	JobTypeSMS             JobType = "sms"
-	JobTypePushNotification JobType = "push_notification"
-	JobTypeAuctionEnd      JobType = "auction_end"
-	JobTypeAuctionReminder JobType = "auction_reminder"
-	JobTypeImageProcess    JobType = "image_process"
-	JobTypeEscrowRelease   JobType = "escrow_release"
-	JobTypeKYCVerify       JobType = "kyc_verify"
-	JobTypeAnalytics       JobType = "analytics"
-	JobTypeCleanup         JobType = "cleanup"
+	JobTypeEmail             JobType = "email"
+	JobTypeSMS               JobType = "sms"
+	JobTypePushNotification  JobType = "push_notification"
+	JobTypeAuctionEnd        JobType = "auction_end"
+	JobTypeAuctionReminder   JobType = "auction_reminder"
+	JobTypeImageProcess      JobType = "image_process"
+	JobTypeEscrowRelease     JobType = "escrow_release"
+	JobTypeKYCVerify         JobType = "kyc_verify"
+	JobTypeAnalytics         JobType = "analytics"
+	JobTypeCleanup           JobType = "cleanup"
+	JobTypeModerationLog     JobType = "moderation_log"
+	JobTypeSettlementProcess JobType = "settlement_process"
+	JobTypeGeoScoreUpdate    JobType = "geoscore.update"
+	JobTypeRouteUpdate       JobType = "route.update"
+	JobTypeBehaviorTrack     JobType = "behavior.track"
 )
 
 // JobStatus defines job lifecycle states
@@ -47,10 +54,36 @@ type Job struct {
 	Attempts    int                    `json:"attempts"`
 	MaxAttempts int                    `json:"max_attempts"`
 	Delay       time.Duration          `json:"delay"`
+	RequestID   string                 `json:"request_id,omitempty"` // propagate from API request
 	CreatedAt   time.Time              `json:"created_at"`
 	StartedAt   *time.Time             `json:"started_at,omitempty"`
 	CompletedAt *time.Time             `json:"completed_at,omitempty"`
 	Error       string                 `json:"error,omitempty"`
+}
+
+var (
+	defaultQueue   *JobQueue
+	defaultQueueMu sync.RWMutex
+)
+
+func SetDefaultQueue(q *JobQueue) {
+	defaultQueueMu.Lock()
+	defer defaultQueueMu.Unlock()
+	defaultQueue = q
+}
+
+func DefaultQueue() *JobQueue {
+	defaultQueueMu.RLock()
+	defer defaultQueueMu.RUnlock()
+	return defaultQueue
+}
+
+func EnqueueDefault(job *Job) error {
+	q := DefaultQueue()
+	if q == nil {
+		return nil
+	}
+	return q.Enqueue(job)
 }
 
 // JobQueue manages background jobs using Redis
@@ -100,7 +133,7 @@ func (q *JobQueue) Enqueue(job *Job) error {
 	}
 
 	queueKey := fmt.Sprintf("jobs:queue:%d", job.Priority)
-	
+
 	if job.Delay > 0 {
 		// Delayed job - use sorted set with score as execution time
 		score := float64(time.Now().Add(job.Delay).Unix())
@@ -125,10 +158,21 @@ func (q *JobQueue) EnqueueIn(job *Job, delay time.Duration) error {
 	return q.Enqueue(job)
 }
 
+const (
+	// DLQAlertThreshold is the number of failed jobs that triggers an alert.
+	DLQAlertThreshold = 50
+
+	// DLQMonitorInterval is how often the DLQ size is checked.
+	DLQMonitorInterval = 30 * time.Second
+)
+
 // Start begins processing jobs
 func (q *JobQueue) Start(workers int) {
 	// Process delayed jobs
 	go q.processDelayedJobs()
+
+	// Start DLQ monitor
+	go q.monitorDLQ()
 
 	// Start workers
 	for i := 0; i < workers; i++ {
@@ -190,7 +234,7 @@ func (q *JobQueue) processJob(job *Job) {
 	job.StartedAt = &now
 	job.Attempts++
 
-	slog.Info("Processing job", "id", job.ID, "type", job.Type, "attempt", job.Attempts)
+	slog.Info("Processing job", "id", job.ID, "type", job.Type, "attempt", job.Attempts, "request_id", job.RequestID)
 
 	ctx, cancel := context.WithTimeout(q.ctx, 5*time.Minute)
 	defer cancel()
@@ -198,7 +242,7 @@ func (q *JobQueue) processJob(job *Job) {
 	err := handler(ctx, job)
 	if err != nil {
 		job.Error = err.Error()
-		
+
 		if job.Attempts < job.MaxAttempts {
 			job.Status = StatusRetrying
 			// Exponential backoff
@@ -230,13 +274,13 @@ func (q *JobQueue) processDelayedJobs() {
 			return
 		case <-ticker.C:
 			now := float64(time.Now().Unix())
-			
+
 			// Get jobs that are ready to run
 			jobs, err := q.rdb.ZRangeByScore(q.ctx, "jobs:delayed", &redis.ZRangeBy{
 				Min: "-inf",
 				Max: fmt.Sprintf("%f", now),
 			}).Result()
-			
+
 			if err != nil {
 				continue
 			}
@@ -244,7 +288,7 @@ func (q *JobQueue) processDelayedJobs() {
 			for _, jobData := range jobs {
 				// Remove from delayed set
 				q.rdb.ZRem(q.ctx, "jobs:delayed", jobData)
-				
+
 				// Add to main queue
 				var job Job
 				if err := json.Unmarshal([]byte(jobData), &job); err != nil {
@@ -265,22 +309,49 @@ func (q *JobQueue) saveFailedJob(job *Job) {
 	q.rdb.LTrim(q.ctx, "jobs:failed", 0, 999)
 }
 
+// monitorDLQ periodically checks the DLQ size and alerts if above threshold.
+func (q *JobQueue) monitorDLQ() {
+	ticker := time.NewTicker(DLQMonitorInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-q.ctx.Done():
+			return
+		case <-ticker.C:
+			size, err := q.rdb.LLen(q.ctx, "jobs:failed").Result()
+			if err != nil {
+				continue
+			}
+			// Expose DLQ size as Prometheus metric
+			metrics.DLQSize.Set(float64(size))
+
+			if size >= int64(DLQAlertThreshold) {
+				slog.Error("DLQ ALERT: failed jobs exceed threshold",
+					"dlq_size", size,
+					"threshold", DLQAlertThreshold,
+				)
+			}
+		}
+	}
+}
+
 // GetStats returns queue statistics
 func (q *JobQueue) GetStats() map[string]interface{} {
 	stats := make(map[string]interface{})
-	
+
 	for i := 1; i <= 10; i++ {
 		key := fmt.Sprintf("jobs:queue:%d", i)
 		count, _ := q.rdb.LLen(q.ctx, key).Result()
 		stats[fmt.Sprintf("priority_%d", i)] = count
 	}
-	
+
 	delayed, _ := q.rdb.ZCard(q.ctx, "jobs:delayed").Result()
 	stats["delayed"] = delayed
-	
+
 	failed, _ := q.rdb.LLen(q.ctx, "jobs:failed").Result()
 	stats["failed"] = failed
-	
+
 	return stats
 }
 
@@ -292,16 +363,68 @@ func (q *JobQueue) RetryFailed() int {
 		if err != nil {
 			break
 		}
-		
+
 		var job Job
 		if err := json.Unmarshal([]byte(data), &job); err != nil {
 			continue
 		}
-		
+
 		job.Attempts = 0
 		job.Error = ""
 		q.Enqueue(&job)
 		count++
 	}
 	return count
+}
+
+// ListFailedJobs returns the most recent failed jobs from the DLQ.
+// Returns up to limit jobs (max 100).
+func (q *JobQueue) ListFailedJobs(limit int) []Job {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	results, err := q.rdb.LRange(q.ctx, "jobs:failed", 0, int64(limit-1)).Result()
+	if err != nil {
+		return nil
+	}
+
+	var jobs []Job
+	for _, data := range results {
+		var job Job
+		if err := json.Unmarshal([]byte(data), &job); err == nil {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs
+}
+
+// PurgeFailedJobs removes all failed jobs from the DLQ.
+func (q *JobQueue) PurgeFailedJobs() int64 {
+	return q.rdb.Del(q.ctx, "jobs:failed").Val()
+}
+
+// RetryOneFailedJob retries a specific failed job by its ID.
+func (q *JobQueue) RetryOneFailedJob(jobID string) bool {
+	results, err := q.rdb.LRange(q.ctx, "jobs:failed", 0, 999).Result()
+	if err != nil {
+		return false
+	}
+
+	for i, data := range results {
+		var job Job
+		if err := json.Unmarshal([]byte(data), &job); err != nil {
+			continue
+		}
+		if job.ID == jobID {
+			// Remove from DLQ
+			q.rdb.LRem(q.ctx, "jobs:failed", 1, data)
+			// Re-enqueue
+			job.Attempts = 0
+			job.Error = ""
+			q.Enqueue(&job)
+			_ = i // satisfy linter
+			return true
+		}
+	}
+	return false
 }

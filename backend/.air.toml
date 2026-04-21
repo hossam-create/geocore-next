@@ -2,7 +2,7 @@ root = "."
 tmp_dir = "tmp"
 [build]
   bin = "./tmp/main"
-  cmd = "go build -o ./tmp/main ./cmd/api/main.go"
+  cmd = "env GOPROXY=direct GOSUMDB=off go build -o ./tmp/main ./cmd/api/main.go"
   delay = 1000
   exclude_dir = ["tmp", "vendor"]
   include_ext = ["go"]

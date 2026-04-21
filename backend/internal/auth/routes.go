@@ -1,79 +1,109 @@
 package auth
 
-  import (
-  	"time"
+import (
+	"time"
 
-  	"github.com/geocore-next/backend/pkg/middleware"
-  	"github.com/gin-gonic/gin"
-  	"github.com/redis/go-redis/v9"
-  	"gorm.io/gorm"
-  )
+	"github.com/geocore-next/backend/internal/notifications"
+	"github.com/geocore-next/backend/internal/security"
+	"github.com/geocore-next/backend/pkg/middleware"
+	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
+)
 
-  // RegisterRoutes mounts all /auth endpoints onto the given router group.
-  //
-  // Rate limits applied (sliding window, Redis-backed):
-  //
-  //	Endpoint                  Limit   Window   Key scope
-  //	──────────────────────── ─────── ──────── ──────────────────────────────────
-  //	POST /register            5 req   1 hour   per IP
-  //	POST /login               10 req  15 min   per IP
-  //	POST /social              10 req  15 min   per IP
-  //	POST /forgot-password     3 req   1 hour   per IP
-  //	POST /reset-password      5 req   1 hour   per IP
-  //	POST /resend-verification 5 req   1 hour   per user (auth-required)
-  func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
-  	h  := NewHandler(db, rdb)
-  	rl := middleware.NewRateLimiter(rdb)
+var notificationService *notifications.Service
 
-  	a := r.Group("/auth")
-  	{
-  		// ── Public endpoints ──────────────────────────────────────────────────
+func SetNotificationService(svc *notifications.Service) {
+	notificationService = svc
+}
 
-  		a.POST("/register",
-  			rl.Limit(5, time.Hour, "auth:register:ip"),
-  			h.Register,
-  		)
+// RegisterRoutes mounts all /auth endpoints onto the given router group.
+//
+// Rate limits applied (sliding window, Redis-backed):
+//
+//	Endpoint                  Limit   Window   Key scope
+//	──────────────────────── ─────── ──────── ──────────────────────────────────
+//	POST /register            3 req   1 hour   per IP
+//	POST /login               5 req   15 min   per IP
+//	POST /refresh             10 req  1 min    per IP
+//	POST /social              10 req  15 min   per IP
+//	POST /forgot-password     3 req   1 hour   per IP
+//	POST /reset-password      5 req   1 hour   per IP
+//	POST /resend-verification 5 req   1 hour   per user (auth-required)
+func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
+	h := NewHandler(db, rdb)
+	rl := middleware.NewRateLimiter(rdb)
+	rl.OnReject = func(c *gin.Context, key, path string, limit int, window time.Duration, retryAfter int64) {
+		security.LogEvent(db, c, nil, security.EventRateLimited, map[string]any{
+			"key":         key,
+			"path":        path,
+			"limit":       limit,
+			"window_sec":  int(window.Seconds()),
+			"retry_after": retryAfter,
+		})
+	}
 
-  		a.POST("/login",
-  			rl.Limit(10, 15*time.Minute, "auth:login:ip"),
-  			h.Login,
-  		)
+	a := r.Group("/auth")
+	{
+		// ── Public endpoints ──────────────────────────────────────────────────
 
-  		a.POST("/verify-email", h.VerifyEmail) // token-based; no extra rate limit needed
+		a.POST("/register",
+			rl.Limit(3, time.Hour, "auth:register:ip"),
+			h.Register,
+		)
 
-  		a.POST("/social",
-  			rl.Limit(10, 15*time.Minute, "auth:social:ip"),
-  			h.SocialLogin,
-  		)
+		a.POST("/login",
+			rl.Limit(5, 15*time.Minute, "auth:login:ip"),
+			h.Login,
+		)
 
-  		// ── Password reset ──────────────────────────────────────────────────────
-  		// /forgot-password has its own internal Redis rate limit (1 per 15 min per
-  		// email), but we add an IP-level limit here as a first line of defence
-  		// against scripted attacks from a single IP.
-  		a.POST("/forgot-password",
-  			rl.Limit(3, time.Hour, "auth:forgot:ip"),
-  			h.ForgotPassword,
-  		)
+		a.POST("/verify-email", h.VerifyEmail)
+		a.GET("/csrf-token", h.CSRFToken)
 
-  		a.POST("/validate-reset-token", h.ValidateResetToken) // read-only check
+		a.POST("/refresh",
+			rl.Limit(10, time.Minute, "auth:refresh:ip"),
+			h.Refresh,
+		)
 
-  		a.POST("/reset-password",
-  			rl.Limit(5, time.Hour, "auth:reset:ip"),
-  			h.ResetPassword,
-  		)
+		a.POST("/social",
+			rl.Limit(10, 15*time.Minute, "auth:social:ip"),
+			h.SocialLogin,
+		)
 
-  		// ── Auth-required endpoints ───────────────────────────────────────────
-  		authed := a.Group("")
-  		authed.Use(middleware.Auth())
-  		{
-  			authed.GET("/me", h.Me)
+		// ── Password reset ──────────────────────────────────────────────────────
+		// /forgot-password has its own internal Redis rate limit (1 per 15 min per
+		// email), but we add an IP-level limit here as a first line of defence
+		// against scripted attacks from a single IP.
+		a.POST("/forgot-password",
+			rl.Limit(3, time.Hour, "auth:forgot:ip"),
+			h.ForgotPassword,
+		)
 
-  			// Per-user limit: prevent spamming verification emails
-  			authed.POST("/resend-verification",
-  				rl.LimitByUser(5, time.Hour, "auth:resend:user"),
-  				h.ResendVerification,
-  			)
-  		}
-  	}
-  }
-  
+		a.POST("/validate-reset-token", h.ValidateResetToken) // read-only check
+
+		a.POST("/reset-password",
+			rl.Limit(5, time.Hour, "auth:reset:ip"),
+			h.ResetPassword,
+		)
+
+		// ── Auth-required endpoints ───────────────────────────────────────────
+		authed := a.Group("")
+		authed.Use(middleware.Auth())
+		{
+			authed.GET("/me", h.Me)
+
+			authed.POST("/change-password",
+				rl.LimitByUser(5, time.Hour, "auth:change_password:user"),
+				h.ChangePassword,
+			)
+
+			authed.POST("/logout", h.Logout)
+
+			// Per-user limit: prevent spamming verification emails
+			authed.POST("/resend-verification",
+				rl.LimitByUser(5, time.Hour, "auth:resend:user"),
+				h.ResendVerification,
+			)
+		}
+	}
+}

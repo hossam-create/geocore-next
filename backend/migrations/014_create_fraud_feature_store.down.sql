@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS fraud_decision_audit;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS tx_count_last_1h;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS tx_count_last_24h;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS withdraw_count_24h;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS failed_logins_24h;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS geo_mismatch_count;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS device_count_7d;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS wallet_drift_24h;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS last_login_ip;
+ALTER TABLE user_risk_profiles DROP COLUMN IF EXISTS last_login_country;

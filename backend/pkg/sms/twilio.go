@@ -1,13 +1,17 @@
 package sms
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/geocore-next/backend/pkg/circuit"
 )
 
 // TwilioClient handles SMS and WhatsApp messaging via Twilio
@@ -41,7 +45,7 @@ func (t *TwilioClient) IsConfigured() bool {
 	return t.accountSID != "" && t.authToken != ""
 }
 
-// SendSMS sends an SMS message
+// SendSMS sends an SMS message (protected by circuit breaker)
 func (t *TwilioClient) SendSMS(to, message string) error {
 	if !t.IsConfigured() {
 		return fmt.Errorf("twilio not configured")
@@ -54,7 +58,13 @@ func (t *TwilioClient) SendSMS(to, message string) error {
 	data.Set("From", t.fromPhone)
 	data.Set("Body", message)
 
-	return t.sendRequest(endpoint, data)
+	err := circuit.SMSBreaker.Execute(func(ctx context.Context) error {
+		return t.sendRequestWithContext(ctx, endpoint, data)
+	})
+	if err != nil {
+		slog.Warn("sms circuit breaker blocked or call failed", "to", to, "error", err)
+	}
+	return err
 }
 
 // SendWhatsApp sends a WhatsApp message
@@ -135,9 +145,14 @@ func (t *TwilioClient) VerifyOTP(to, code string) (bool, error) {
 	return result.Status == "approved" || result.Valid, nil
 }
 
-// sendRequest sends a POST request to Twilio API
+// sendRequest sends a POST request to Twilio API (no context — legacy)
 func (t *TwilioClient) sendRequest(endpoint string, data url.Values) error {
-	req, err := http.NewRequest("POST", endpoint, strings.NewReader(data.Encode()))
+	return t.sendRequestWithContext(context.Background(), endpoint, data)
+}
+
+// sendRequestWithContext sends a POST request to Twilio API with context timeout.
+func (t *TwilioClient) sendRequestWithContext(ctx context.Context, endpoint string, data url.Values) error {
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(data.Encode()))
 	if err != nil {
 		return err
 	}
@@ -167,28 +182,28 @@ func (t *TwilioClient) sendRequest(endpoint string, data url.Values) error {
 
 // SendAuctionEndingSoon notifies user about auction ending
 func (t *TwilioClient) SendAuctionEndingSoon(to, auctionTitle string, minutesLeft int, currentBid float64) error {
-	msg := fmt.Sprintf("⏰ المزاد '%s' ينتهي خلال %d دقيقة! السعر الحالي: $%.2f. سارع بالمزايدة!", 
+	msg := fmt.Sprintf("⏰ المزاد '%s' ينتهي خلال %d دقيقة! السعر الحالي: $%.2f. سارع بالمزايدة!",
 		auctionTitle, minutesLeft, currentBid)
 	return t.SendSMS(to, msg)
 }
 
 // SendOutbidNotification notifies user they were outbid
 func (t *TwilioClient) SendOutbidNotification(to, auctionTitle string, newBid float64) error {
-	msg := fmt.Sprintf("🔔 تم تجاوز مزايدتك على '%s'! المزايدة الجديدة: $%.2f. زايد الآن!", 
+	msg := fmt.Sprintf("🔔 تم تجاوز مزايدتك على '%s'! المزايدة الجديدة: $%.2f. زايد الآن!",
 		auctionTitle, newBid)
 	return t.SendSMS(to, msg)
 }
 
 // SendAuctionWon notifies winner
 func (t *TwilioClient) SendAuctionWon(to, auctionTitle string, winningBid float64) error {
-	msg := fmt.Sprintf("🎉 مبروك! فزت بالمزاد '%s' بمبلغ $%.2f. أكمل الدفع الآن!", 
+	msg := fmt.Sprintf("🎉 مبروك! فزت بالمزاد '%s' بمبلغ $%.2f. أكمل الدفع الآن!",
 		auctionTitle, winningBid)
 	return t.SendSMS(to, msg)
 }
 
 // SendOrderConfirmation sends order confirmation
 func (t *TwilioClient) SendOrderConfirmation(to, orderID string, total float64) error {
-	msg := fmt.Sprintf("✅ تم تأكيد طلبك #%s بمبلغ $%.2f. سنقوم بإعلامك عند الشحن.", 
+	msg := fmt.Sprintf("✅ تم تأكيد طلبك #%s بمبلغ $%.2f. سنقوم بإعلامك عند الشحن.",
 		orderID, total)
 	return t.SendSMS(to, msg)
 }
@@ -213,7 +228,7 @@ func (t *TwilioClient) SendPasswordReset(to, code string) error {
 
 // SendEscrowReleased notifies seller about escrow release
 func (t *TwilioClient) SendEscrowReleased(to string, amount float64, orderID string) error {
-	msg := fmt.Sprintf("💰 تم تحويل $%.2f إلى محفظتك من الطلب #%s. شكراً لك!", 
+	msg := fmt.Sprintf("💰 تم تحويل $%.2f إلى محفظتك من الطلب #%s. شكراً لك!",
 		amount, orderID)
 	return t.SendSMS(to, msg)
 }

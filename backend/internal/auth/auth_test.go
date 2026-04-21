@@ -3,16 +3,21 @@ package auth_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/geocore-next/backend/internal/auth"
+	"github.com/geocore-next/backend/internal/security"
 	"github.com/geocore-next/backend/internal/users"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -20,17 +25,18 @@ import (
 
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", uuid.NewString())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&users.User{}))
+	require.NoError(t, db.AutoMigrate(&users.User{}, &security.SecurityAuditLog{}))
 	return db
 }
 
-func setupRouter(db *gorm.DB) *gin.Engine {
+func setupRouter(db *gorm.DB, rdb *redis.Client) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	v1 := r.Group("/api/v1")
-	auth.RegisterRoutes(v1, db, nil)
+	auth.RegisterRoutes(v1, db, rdb)
 	return r
 }
 
@@ -45,7 +51,9 @@ func jsonBody(t *testing.T, payload any) *bytes.Buffer {
 
 func TestRegister_Success(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupRouter(db)
+	mini := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	r := setupRouter(db, rdb)
 
 	body := jsonBody(t, map[string]string{
 		"name":     "Ahmed Al-Farsi",
@@ -64,12 +72,15 @@ func TestRegister_Success(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	data, ok := resp["data"].(map[string]any)
 	require.True(t, ok)
-	assert.NotEmpty(t, data["token"])
+	assert.NotEmpty(t, data["access_token"])
+	assert.NotEmpty(t, data["refresh_token"])
 }
 
 func TestRegister_DuplicateEmail(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupRouter(db)
+	mini := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	r := setupRouter(db, rdb)
 
 	body := jsonBody(t, map[string]string{
 		"name": "User A", "email": "dup@test.com",
@@ -95,7 +106,9 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 
 func TestRegister_WeakPassword(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupRouter(db)
+	mini := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	r := setupRouter(db, rdb)
 
 	body := jsonBody(t, map[string]string{
 		"name": "User", "email": "user@test.com",
@@ -110,7 +123,9 @@ func TestRegister_WeakPassword(t *testing.T) {
 
 func TestLogin_Success(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupRouter(db)
+	mini := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	r := setupRouter(db, rdb)
 
 	// Register first
 	rBody := jsonBody(t, map[string]string{
@@ -136,7 +151,9 @@ func TestLogin_Success(t *testing.T) {
 
 func TestLogin_WrongPassword(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupRouter(db)
+	mini := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	r := setupRouter(db, rdb)
 
 	// Register
 	rBody := jsonBody(t, map[string]string{
@@ -157,4 +174,59 @@ func TestLogin_WrongPassword(t *testing.T) {
 	lReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(wl, lReq)
 	assert.Equal(t, http.StatusUnauthorized, wl.Code)
+}
+
+func TestChangePassword_EndToEnd(t *testing.T) {
+	db := setupTestDB(t)
+	mini := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	r := setupRouter(db, rdb)
+
+	oldPw := "TempPass1!A"
+	newPw := "TempPass2!A"
+	email := "tempchange@test.com"
+
+	// Register first
+	rBody := jsonBody(t, map[string]string{
+		"name":     "Temp User",
+		"email":    email,
+		"password": oldPw,
+		"phone":    "+971501234567",
+	})
+	w := httptest.NewRecorder()
+	regReq, _ := http.NewRequest(http.MethodPost, "/api/v1/auth/register", rBody)
+	regReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, regReq)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var regResp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &regResp))
+	data, ok := regResp["data"].(map[string]any)
+	require.True(t, ok)
+	access, _ := data["access_token"].(string)
+	require.NotEmpty(t, access)
+
+	// Change password
+	chBody := jsonBody(t, map[string]string{
+		"old_password":     oldPw,
+		"new_password":     newPw,
+		"confirm_password": newPw,
+	})
+	wc := httptest.NewRecorder()
+	chReq, _ := http.NewRequest(http.MethodPost, "/api/v1/auth/change-password", chBody)
+	chReq.Header.Set("Content-Type", "application/json")
+	chReq.Header.Set("Authorization", "Bearer "+access)
+	r.ServeHTTP(wc, chReq)
+	assert.Equal(t, http.StatusOK, wc.Code)
+
+	// Login with new password should succeed
+	lBody := jsonBody(t, map[string]string{
+		"email":    email,
+		"password": newPw,
+	})
+	wl := httptest.NewRecorder()
+	lReq, _ := http.NewRequest(http.MethodPost, "/api/v1/auth/login", lBody)
+	lReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(wl, lReq)
+	assert.Equal(t, http.StatusOK, wl.Code)
 }

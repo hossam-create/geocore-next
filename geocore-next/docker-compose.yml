@@ -15,7 +15,7 @@ services:
       DB_PORT: "5432"
       DB_USER: geocore
       DB_PASSWORD: geocore_secret
-      DB_NAME: geocore_dev
+      DB_NAME: geocore
       DB_SSLMODE: disable
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -38,13 +38,13 @@ services:
     environment:
       POSTGRES_USER: geocore
       POSTGRES_PASSWORD: geocore_secret
-      POSTGRES_DB: geocore_dev
+      POSTGRES_DB: geocore
     ports:
       - "5432:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U geocore -d geocore_dev"]
+      test: ["CMD-SHELL", "pg_isready -U geocore -d geocore"]
       interval: 5s
       timeout: 5s
       retries: 10

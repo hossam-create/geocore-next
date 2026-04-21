@@ -1,2115 +1,2005 @@
-# ✅ DOCUMENT 3: TASKS.md — GeoCore Next Development Tasks
+# TASKS.md — GeoCore Next: Master Development Roadmap
 
----
-
-## EPIC 1 — Foundation (TASK-001 → TASK-010)
+> **Generated from gap analysis vs. Mnbara Platform.**
+> Last updated: 2026-03-30 | Stack: Go 1.23 backend · Next.js 15 App Router frontend
 
 ---
-
-## TASK-001: Verify Go Build Passes
-**Epic:** Foundation | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** none | **Go Status:** Done
-
-### Description
-Run `go build ./...` and fix any import issues. The codebase has duplicate utility functions (`getenv` in `main.go` and `database.go`, `defaultStr` in `listings/handler.go` and `chat/handler.go`) that need consolidation.
 
-### Technical Notes
-Extract shared helpers to `pkg/util/util.go`. Check that all internal package imports resolve correctly. The `pkg/redis/redis.go` package is defined but unused in `main.go` — decide whether to use it or remove it.
+## How to Use This File
 
-### Acceptance Criteria
-- [x] `go build ./...` completes with zero errors
-- [x] `go vet ./...` has no warnings
-- [x] Duplicate `getenv` and `defaultStr` functions consolidated into `pkg/util/`
-- [x] `pkg/redis/redis.go` either used or removed
-
-### Files
-- `backend/pkg/util/util.go` — create with shared helpers
-- `backend/cmd/api/main.go` — remove duplicate `getenv`, import from `pkg/util`
-- `backend/pkg/database/database.go` — remove duplicate `getenv`, import from `pkg/util`
-- `backend/internal/listings/handler.go` — remove `defaultStr`, import from `pkg/util`
-- `backend/internal/chat/handler.go` — remove `defaultStr`, import from `pkg/util`
+1. Find the first task with **Status: `[ ] Not started`** that has no unmet dependencies.
+2. Read its full section carefully — especially Context and Files.
+3. Read the referenced source files before writing any code.
+4. Implement **ONLY** this task — do not touch other tasks.
+5. When done: change `[ ]` to `[x]`, tick each acceptance criterion.
+6. Report which files were created/modified, then move to next task.
+7. To reference the Mnbara codebase: path is `E:\New computer\Development Coding\Projects\Repos\geo\mnbara-platform`
 
 ---
-
-## TASK-002: PostgreSQL Connection with Retry
-**Epic:** Foundation | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-001 | **Go Status:** Partial
-
-### Description
-Add retry logic to `database.Connect()`. Currently it fails immediately if PostgreSQL isn't ready. In Docker, the API container often starts before Postgres despite `depends_on` health checks.
-
-### Technical Notes
-Implement exponential backoff: 5 attempts, starting at 2s. Use `time.Sleep` between attempts. Log each retry attempt with `zap.Warn`. Pattern: wrap the `gorm.Open()` call in a loop.
 
-### Acceptance Criteria
-- [ ] `database.Connect()` retries up to 5 times with 2s backoff
-- [ ] Each retry attempt is logged with attempt number
-- [ ] After 5 failures, returns error with clear message
-- [ ] `docker-compose up` starts cleanly even with slow Postgres startup
-
-### Files
-- `backend/pkg/database/database.go` — add retry loop around `gorm.Open()`
+# PHASE 0 — Foundation
+**Goal:** App has complete data models and API for all commerce flows. No crashes. All new endpoints return data.
 
 ---
 
-## TASK-003: Redis Connection with Health Check
-**Epic:** Foundation | **Type:** feature | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-001 | **Go Status:** Partial
+## TASK-001: Order Management — Backend Models & API
 
-### Description
-Add PING health check on Redis startup with retry, matching the DB retry pattern. Currently `main.go` has a basic ping but no retry.
+**Phase:** 0 — Foundation
+**Priority:** CRITICAL
+**Effort:** L (2-3 days)
+**Layer:** Backend (Go)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Technical Notes
-Use the same 5-attempt, 2s-backoff pattern as TASK-002. Consider using `pkg/redis/redis.go` `Connect()` instead of inline client creation in `main.go`.
+### Context
+When a user wins an auction or buys a fixed-price listing, nothing tracks what was purchased, from whom, at what price, or the delivery state. The checkout page (`frontend/app/checkout/page.tsx`) calls the Stripe payment flow, but after payment succeeds there is no order record. This is the single most important missing backend domain.
 
 ### Acceptance Criteria
-- [ ] Redis connection retries up to 5 times with 2s backoff
-- [ ] `redis-cli PING` returns PONG before API accepts traffic
-- [ ] Health check logged with zap
-- [ ] Consistent with DB retry pattern
-
-### Files
-- `backend/cmd/api/main.go` — add Redis retry logic or use `pkg/redis`
-
----
-
-## TASK-004: JWT Middleware with Dual Tokens
-**Epic:** Foundation | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-001 | **Go Status:** Partial
+- [x] `orders` table exists in PostgreSQL with migration file
+- [x] Order states: `pending -> confirmed -> processing -> shipped -> delivered -> completed -> cancelled -> disputed`
+- [x] `OrderItem` sub-struct tracks listing_id, auction_id, quantity, unit_price, snapshot of title
+- [x] `POST /api/v1/orders` — creates order from a completed payment intent (called by Stripe webhook)
+- [x] `GET /api/v1/orders` — paginated buyer order list
+- [x] `GET /api/v1/orders/selling` — paginated seller order list
+- [x] `GET /api/v1/orders/:id` — full order detail (buyer or seller only)
+- [x] `PATCH /api/v1/orders/:id/confirm` — seller confirms order
+- [x] `PATCH /api/v1/orders/:id/ship` — seller marks shipped (requires tracking_number in body)
+- [x] `PATCH /api/v1/orders/:id/deliver` — buyer confirms delivery, triggers escrow release job
+- [x] `PATCH /api/v1/orders/:id/cancel` — cancel if still `pending`
+- [x] All endpoints require JWT auth
+- [x] `go build ./...` still passes
 
-### Description
-Upgrade from single 30-day JWT to access (15min) + refresh (30d) token pair. Add `Role` field to Claims so `AdminOnly()` middleware works.
+### Verification Evidence (2026-04-02)
+- [x] `backend/internal/order/` — model.go, handler.go, repository.go, routes.go created
+- [x] `backend/migrations/005_create_orders.up.sql` — orders + order_items tables with JSONB status_history
+- [x] `order.RegisterRoutes` called in `backend/cmd/api/main.go`
+- [x] `payments/handler.go` → `handlePaymentSuccess` calls `createOrderFromPayment` after escrow creation (idempotent)
+- [x] `go build ./...` → exit 0, no errors
 
-### Technical Notes
-Current `generateToken()` in `auth/handler.go` creates one 30-day token. Split into `generateAccessToken(15min)` and `generateRefreshToken(30d)`. Store refresh token hash in Redis with TTL. Add `Role string` to `middleware.Claims` and set `user_role` in gin context.
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/order/model.go          -- Order, OrderItem, OrderStatus structs + GORM tags
+  backend/internal/order/handler.go        -- HTTP handlers for all endpoints
+  backend/internal/order/routes.go         -- RegisterRoutes(v1, db, rdb)
+  backend/migrations/005_create_orders.up.sql
+  backend/migrations/005_create_orders.down.sql
 
-### Acceptance Criteria
-- [ ] Access token expires in 15 minutes
-- [ ] Refresh token expires in 30 days, stored in Redis
-- [ ] `Claims` struct includes `Role` field
-- [ ] Auth middleware sets `user_id`, `user_email`, and `user_role` in gin context
-- [ ] `AdminOnly()` correctly reads `user_role` from context
+MODIFY:
+  backend/cmd/api/main.go                  -- import order pkg, call order.RegisterRoutes(v1, db, rdb)
+  backend/internal/payments/webhook.go     -- on payment_intent.succeeded, call order creation logic
+  backend/internal/auctions/handler.go     -- on auction end (winner determined), enqueue order creation job
+```
 
-### Files
-- `backend/pkg/middleware/auth.go` — add `Role` to Claims, set `user_role` in context
-- `backend/internal/auth/handler.go` — split `generateToken` into access+refresh, include role
+### Phase Gate Contribution
+Required before Phase 0 gate can pass.
 
 ---
 
-## TASK-005: Rate Limiting
-**Epic:** Foundation | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-003 | **Go Status:** Not started
+## TASK-002: Shopping Cart — Backend Service
 
-### Description
-Add IP-based rate limiting using Redis INCR with sliding window. 100 requests per minute per IP. Skip OPTIONS preflight requests.
+**Phase:** 0 — Foundation
+**Priority:** CRITICAL
+**Effort:** M (1 day)
+**Layer:** Backend (Go)
+**Status:** [x] Completed
+**Depends on:** None
 
-### Technical Notes
-Create `pkg/middleware/ratelimit.go`. Use Redis key `rate:{ip}` with INCR and EXPIRE 60s. Return 429 with `Retry-After` header when exceeded. Check `c.Request.Method == "OPTIONS"` to skip preflight.
+### Context
+GeoCore Next has a `CheckoutPage` but no cart. For fixed-price listings, there is no path for a user to collect multiple items before paying. Cart state is stored in Redis (ephemeral, per-session) — not PostgreSQL — because carts are temporary and high-write.
 
 ### Acceptance Criteria
-- [ ] 100 req/min per IP enforced via Redis
-- [ ] OPTIONS requests are exempt
-- [ ] 429 response includes `Retry-After` header
-- [ ] Rate limit headers (`X-RateLimit-Remaining`, `X-RateLimit-Limit`) on every response
+- [x] `POST /api/v1/cart/items` — add listing to cart (body: `listing_id`, `quantity`)
+- [x] `GET /api/v1/cart` — return current user's cart with line items and total
+- [x] `DELETE /api/v1/cart/items/:listing_id` — remove item
+- [x] `DELETE /api/v1/cart` — clear entire cart
+- [x] Cart stored in Redis under key `cart:{user_id}` as JSON, TTL 7 days
+- [x] Adding a listing that is already sold or expired returns 400
+- [x] Cart item count exposed in response for header badge
+- [x] `go build ./...` still passes
 
-### Files
-- `backend/pkg/middleware/ratelimit.go` — create rate limiter middleware
-- `backend/cmd/api/main.go` — apply middleware globally
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/cart/model.go           -- CartItem, Cart structs
+  backend/internal/cart/handler.go         -- HTTP handlers
+  backend/internal/cart/routes.go          -- RegisterRoutes(v1, db, rdb)
 
+MODIFY:
+  backend/cmd/api/main.go                  -- import cart pkg, call cart.RegisterRoutes(v1, db, rdb)
+```
+
 ---
 
-## TASK-006: Standard Response Package Verification
-**Epic:** Foundation | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-001 | **Go Status:** Done
+## TASK-003: Watchlist / Favorites — Backend
+
+**Phase:** 0 — Foundation
+**Priority:** CRITICAL
+**Effort:** S (half day)
+**Layer:** Backend (Go)
+**Status:** [x] Completed
+**Depends on:** None
 
-### Description
-Verify the existing `response` package works correctly for all status codes. The package already has OK/Created/BadRequest/Unauthorized/Forbidden/NotFound/InternalError helpers. Verify they are used consistently across all handlers.
+### Context
+No watchlist or favorites feature exists. Buyers have no way to save listings they are interested in. The `WatchlistPage.tsx` stub exists in the frontend but has no backend to call.
 
-### Technical Notes
-`pkg/response/response.go` defines `R{Success, Data, Error, Meta}` struct. Audit all handlers to ensure none use `c.JSON()` directly. The `InternalError` function takes an error but doesn't expose it — verify this is intentional for security.
-
 ### Acceptance Criteria
-- [ ] No handler calls `c.JSON()` directly — all use `response.*` helpers
-- [ ] `InternalError` logs the actual error (add zap logging if missing)
-- [ ] Write unit test for each response helper function
-- [ ] `Meta` struct used consistently for pagination
-
-### Files
-- `backend/pkg/response/response.go` — add error logging to InternalError
-- `backend/pkg/response/response_test.go` — create unit tests
+- [x] `watchlist_items` table: user_id, listing_id, created_at (composite PK)
+- [x] `POST /api/v1/watchlist/:listing_id` — add to watchlist (idempotent)
+- [x] `DELETE /api/v1/watchlist/:listing_id` — remove from watchlist
+- [x] `GET /api/v1/watchlist` — paginated list of watched listings with full listing data joined
+- [x] `GET /api/v1/listings/:id` response includes `is_watched: bool` when auth present
+- [x] Auth required for all endpoints
+- [x] `go build ./...` still passes
 
----
-
-## TASK-007: Docker Compose Health Verification
-**Epic:** Foundation | **Type:** chore | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-002, TASK-003 | **Go Status:** Partial
-
-### Description
-Verify all 5 Docker services start healthy. Current docker-compose.yml has postgres and redis health checks but API has none. Add API health check and Meilisearch health check.
-
-### Technical Notes
-The API already has `GET /health` returning `{"status":"ok"}`. Add a `healthcheck` block to the `api` service in docker-compose.yml. Meilisearch has a built-in `/health` endpoint.
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/watchlist/model.go      -- WatchlistItem struct
+  backend/internal/watchlist/handler.go    -- HTTP handlers
+  backend/internal/watchlist/routes.go     -- RegisterRoutes(v1, db)
+  backend/migrations/006_create_watchlist.up.sql
+  backend/migrations/006_create_watchlist.down.sql
 
-### Acceptance Criteria
-- [ ] `docker-compose up -d` starts all 5 services
-- [ ] `docker-compose ps` shows all services as "healthy"
-- [ ] API health check: `curl localhost:8080/health` returns 200
-- [ ] No service restarts within 60 seconds of startup
-
-### Files
-- `docker-compose.yml` — add healthcheck for api and meilisearch services
+MODIFY:
+  backend/cmd/api/main.go                  -- register watchlist routes
+  backend/internal/listings/handler.go     -- add is_watched field to GetListing response
+```
 
 ---
-
-## TASK-008: GitHub Actions CI
-**Epic:** Foundation | **Type:** chore | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-001 | **Go Status:** Not started
-
-### Description
-Create GitHub Actions workflow for CI: run `go vet`, `go test`, and `go build` on every push and pull request.
-
-### Technical Notes
-Use `actions/setup-go@v5` with Go 1.23. Cache go modules. Run against push to main and all PRs. Add PostgreSQL and Redis service containers for integration tests.
 
-### Acceptance Criteria
-- [ ] `.github/workflows/ci.yml` exists and runs on push/PR
-- [ ] `go vet ./...` passes
-- [ ] `go test ./...` passes
-- [ ] `go build ./cmd/api/main.go` passes
-- [ ] CI completes in under 3 minutes
-
-### Files
-- `.github/workflows/ci.yml` — create CI workflow
-
----
+## TASK-004: Refund & Dispute Resolution — Backend Completion
 
-## TASK-009: Next.js 15 Frontend Init
-**Epic:** Foundation | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** none | **Go Status:** Not started
+**Phase:** 0 — Foundation
+**Priority:** CRITICAL
+**Effort:** M (1 day)
+**Layer:** Backend (Go)
+**Status:** [x] Completed
+**Depends on:** TASK-001
 
-### Description
-Initialize Next.js 15 frontend with App Router, TypeScript strict mode, Tailwind CSS, and shadcn/ui. Set up project structure.
+### Context
+`backend/internal/disputes/` exists with partial implementation but the escrow release flow and refund webhook handlers are incomplete. Orders can get stuck in `disputed` state forever without resolution.
 
-### Technical Notes
-Use `npx create-next-app@latest ./frontend --typescript --tailwind --eslint --app --src-dir`. Install shadcn/ui via `npx shadcn-ui@latest init`. Configure `NEXT_PUBLIC_API_URL=http://localhost:8080/api/v1`.
+Reference: `mnbara-platform/services/payment-service/` — refund logic and escrow release patterns.
 
 ### Acceptance Criteria
-- [ ] `frontend/` directory created with Next.js 15
-- [ ] TypeScript strict mode enabled
-- [ ] Tailwind CSS configured
-- [ ] shadcn/ui initialized with at least Button, Input, Card components
-- [ ] `npm run dev` starts on port 3000
-- [ ] `npm run build` completes without errors
+- [x] `POST /api/v1/disputes` — buyer opens dispute (requires order_id, reason, evidence text)
+- [x] `GET /api/v1/disputes/:id` — dispute detail (buyer or seller or admin)
+- [x] `PATCH /api/v1/disputes/:id/resolve` — admin resolves with outcome: `refund_buyer` or `release_seller`
+- [x] When resolved as `refund_buyer`: call Stripe refund API, update order status to `refunded`
+- [x] When resolved as `release_seller`: call escrow release job, update order status to `completed`
+- [x] Escrow release background job (`HandleEscrowRelease`) moves held funds to seller wallet
+- [x] `go build ./...` still passes
 
-### Files
-- `frontend/` — entire new Next.js project
-- `frontend/src/lib/api.ts` — create API client stub
-- `frontend/src/app/layout.tsx` — root layout with providers
+### Files to Create / Modify
+```
+MODIFY:
+  backend/internal/disputes/handler.go     -- complete Resolve handler, add Stripe refund call
+  backend/internal/disputes/routes.go      -- verify all routes registered
+  backend/pkg/jobs/handlers.go             -- implement HandleEscrowRelease stub
+  backend/cmd/api/main.go                  -- verify disputes routes registered
+```
 
 ---
 
-## TASK-010: Frontend API Client
-**Epic:** Foundation | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-009 | **Go Status:** Not started
+## TASK-005: Seller Analytics — Backend Data Endpoints
 
-### Description
-Create an axios-based API client with auto-refresh token on 401 response. Base URL from `NEXT_PUBLIC_API_URL`.
+**Phase:** 0 — Foundation
+**Priority:** CRITICAL
+**Effort:** M (1 day)
+**Layer:** Backend (Go)
+**Status:** [x] Completed
+**Depends on:** TASK-001
 
-### Technical Notes
-Create `api.ts` with axios instance. Add response interceptor: on 401, try refresh token, retry original request. Store tokens in httpOnly cookies or localStorage (localStorage for simplicity in MVP). Export typed API functions.
+### Context
+`backend/internal/analytics/` exists but exposes only admin-level metrics. Sellers have no API to query their own performance data (revenue, views, conversion rate). The frontend analytics pages (Phase 3) depend on these endpoints.
 
 ### Acceptance Criteria
-- [ ] `api.ts` exports configured axios instance
-- [ ] Base URL reads from `NEXT_PUBLIC_API_URL` env var
-- [ ] 401 interceptor attempts token refresh before failing
-- [ ] Typed API functions for auth (login, register, refresh)
-- [ ] Error handling wraps axios errors into user-friendly messages
+- [x] `GET /api/v1/analytics/seller/summary` — seller's own metrics: total_revenue, total_orders, active_listings, total_views, avg_rating
+- [x] `GET /api/v1/analytics/seller/revenue?period=7d|30d|90d|1y` — revenue time-series (date, amount)
+- [x] `GET /api/v1/analytics/seller/listings` — per-listing breakdown: title, views, favorites, orders, conversion_rate
+- [x] All endpoints auth-required, only return data for the requesting seller
+- [x] `go build ./...` still passes
 
-### Files
-- `frontend/src/lib/api.ts` — create API client with interceptors
-- `frontend/src/lib/auth.ts` — token storage and refresh logic
+### Files to Create / Modify
+```
+MODIFY:
+  backend/internal/analytics/handler.go    -- add SellerSummary, SellerRevenue, SellerListings handlers
+  backend/internal/analytics/routes.go     -- register new routes under /analytics/seller/*
+  backend/cmd/api/main.go                  -- verify analytics routes registered
+```
 
----
-
-## EPIC 2 — Auth & Users (TASK-011 → TASK-020)
+### Phase 0 Gate
+> `go build ./...` passes with zero errors.
+> All 5 new backend services have routes registered in `main.go`.
+> `GET /api/v1/orders`, `GET /api/v1/cart`, `GET /api/v1/watchlist`, `POST /api/v1/disputes`, `GET /api/v1/analytics/seller/summary` all return 200 with a valid test JWT.
 
 ---
-
-## TASK-011: POST /auth/register — Dual Tokens
-**Epic:** Auth & Users | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-004 | **Go Status:** Partial
-
-### Description
-Update Register handler to return access + refresh token pair instead of single token. bcrypt cost 12 is already correct.
-
-### Technical Notes
-Current `auth/handler.go:Register()` calls `generateToken()` which returns one 30-day JWT. After TASK-004 splits tokens, update Register to return both `access_token` and `refresh_token` in response. Store refresh token hash in Redis with key `refresh:{userID}:{tokenID}`.
 
-### Acceptance Criteria
-- [ ] Register returns `{access_token, refresh_token, user}` (user without password_hash)
-- [ ] Access token expires in 15 minutes
-- [ ] Refresh token expires in 30 days
-- [ ] Refresh token stored in Redis with correct TTL
-- [ ] Duplicate email returns 400 "Email already in use"
-- [ ] Password validation enforces min 8 chars
-
-### Files
-- `backend/internal/auth/handler.go` — update Register to return dual tokens
+# PHASE 1 — Critical Frontend (Launch Blockers)
+**Goal:** A user can complete the full buy/sell flow end-to-end. All legal pages exist.
 
 ---
-
-## TASK-012: POST /auth/login — Dual Tokens
-**Epic:** Auth & Users | **Type:** feature | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-011 | **Go Status:** Partial
-
-### Description
-Update Login handler to return access + refresh token pair. Currently returns single token.
 
-### Technical Notes
-Same pattern as TASK-011 but for Login. Verify password with `bcrypt.CompareHashAndPassword`, then generate dual tokens. Update last_seen_at on successful login.
-
-### Acceptance Criteria
-- [ ] Login returns `{access_token, refresh_token, user}`
-- [ ] Invalid email returns 401 (not 404, to prevent enumeration)
-- [ ] Invalid password returns 401
-- [ ] `last_seen_at` updated on successful login
-
-### Files
-- `backend/internal/auth/handler.go` — update Login response
-
----
+## TASK-006: Order Management Pages
 
-## TASK-013: POST /auth/refresh — Token Rotation
-**Epic:** Auth & Users | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-012 | **Go Status:** Not started
+**Phase:** 1 — Critical Frontend
+**Priority:** CRITICAL
+**Effort:** L (2 days)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-001
 
-### Description
-Implement refresh token endpoint. Validates the refresh token, rotates both tokens, and invalidates the old refresh token in Redis.
+### Context
+After a buyer pays, they have nowhere to see their order status. After a seller receives an order, they have no UI to confirm shipment. These are the most critical missing frontend flows.
 
-### Technical Notes
-Accept `{refresh_token}` in body. Parse and validate JWT. Check Redis for `refresh:{userID}:{tokenID}` — if missing, token was already used (possible theft, invalidate all user tokens). Generate new access+refresh pair, store new refresh in Redis, delete old.
+Reference: `mnbara-platform/apps/web/src/pages/orders/` — OrdersPage, OrderDetailPage, SellerOrdersPage
 
 ### Acceptance Criteria
-- [ ] POST /auth/refresh accepts `{refresh_token}`
-- [ ] Valid refresh → returns new access+refresh pair
-- [ ] Old refresh token invalidated in Redis after use
-- [ ] Expired refresh → 401
-- [ ] Reused refresh token → invalidate ALL user tokens (security)
-- [ ] Missing/malformed token → 400
+- [x] Route `/orders` -> `OrdersPage` — paginated list of buyer's orders with status badges
+- [x] Route `/orders/:id` -> `OrderDetailPage` — full order detail: items, status timeline, shipping info, action buttons
+- [x] Route `/selling/orders` -> `SellerOrdersPage` — seller's incoming orders list
+- [x] Buyer can confirm delivery on `OrderDetailPage` (calls `PATCH /api/v1/orders/:id/deliver`)
+- [x] Seller can confirm and mark shipped from `SellerOrdersPage` detail view
+- [x] Order status displayed with color-coded badges
+- [x] Auth required; redirect to `/login` if not authenticated
 
-### Files
-- `backend/internal/auth/handler.go` — add `Refresh` method
-- `backend/internal/auth/routes.go` — add `POST /auth/refresh` route
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/orders/OrdersPage.tsx
+  frontend/app/orders/OrderDetailPage.tsx
+  frontend/app/orders/SellerOrdersPage.tsx
+  frontend/components/orders/OrderStatusBadge.tsx
+  frontend/components/orders/OrderTimeline.tsx
 
----
-
-## TASK-014: POST /auth/google — OAuth 2.0
-**Epic:** Auth & Users | **Type:** feature | **Priority:** P1 | **Estimate:** 4h | **Depends on:** TASK-013 | **Go Status:** Not started
-
-### Description
-Implement Google OAuth 2.0 login. Accept Google ID token from frontend, verify with Google, upsert user on first login.
-
-### Technical Notes
-Use `google.golang.org/api/oauth2/v2` to verify the ID token. Extract email, name, avatar from Google claims. If user exists with that email, link Google account. If new, create user with `auth_provider=google` and no password_hash. Return dual tokens.
+MODIFY:
+  frontend/app/layout.tsx           -- add /orders, /orders/:id, /selling/orders routes
+  frontend/app/DashboardPage.tsx  -- add "My Orders" and "My Sales" links
+```
 
-### Acceptance Criteria
-- [ ] POST /auth/google accepts `{id_token}`
-- [ ] Verifies token with Google's public keys
-- [ ] New Google user → creates account, returns tokens
-- [ ] Existing email → links Google, returns tokens
-- [ ] Invalid token → 401
-
-### Files
-- `backend/internal/auth/handler.go` — add `GoogleAuth` method
-- `backend/internal/auth/routes.go` — add `POST /auth/google`
-- `backend/internal/users/model.go` — add `AuthProvider` field
-
 ---
 
-## TASK-015: GET /users/me — Full Profile
-**Epic:** Auth & Users | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-004 | **Go Status:** Done
+## TASK-007: Cart Page + Cart Icon Component
 
-### Description
-Verify `/users/me` returns full user object excluding password_hash. Currently implemented in both `auth/handler.go:Me()` and `users/handler.go:GetMe()`.
+**Phase:** 1 — Critical Frontend
+**Priority:** CRITICAL
+**Effort:** M (1 day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-002
 
-### Technical Notes
-There's duplication: `auth/handler.go` has `Me()` and `users/handler.go` has `GetMe()`. Consolidate to one. Ensure `PasswordHash` has `json:"-"` tag (already present). Add test.
+### Context
+No cart UI exists. The cart backend (TASK-002) provides the API. This task adds the cart page and the persistent cart icon in the header with item count badge.
 
 ### Acceptance Criteria
-- [ ] GET /auth/me or GET /users/me returns full user object
-- [ ] `password_hash` is NOT in the response
-- [ ] Duplicate endpoint consolidated
-- [ ] Unit test verifies password_hash exclusion
-
-### Files
-- `backend/internal/auth/handler.go` — remove duplicate `Me()` or redirect
-- `backend/internal/users/handler.go` — keep `GetMe()`
-
----
-
-## TASK-016: PUT /users/me — Profile Update
-**Epic:** Auth & Users | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-015 | **Go Status:** Done
-
-### Description
-Verify PUT /users/me correctly updates allowed fields: name, bio, location, language, currency.
-
-### Technical Notes
-Current implementation in `users/handler.go:UpdateMe()` manually checks each field. Consider using a whitelist map pattern like `listings/handler.go:Update()` for consistency.
+- [x] Route `/cart` -> `CartPage` — list of cart items, quantities, subtotal, "Proceed to Checkout" button
+- [x] Each cart item shows: listing image, title, price, quantity, remove button
+- [x] "Proceed to Checkout" navigates to existing `/checkout` with cart items pre-loaded
+- [x] `CartIcon` component in `Header` shows item count badge from `GET /api/v1/cart`
+- [x] Cart count updates in real-time when items are added or removed
+- [x] Empty cart state with "Browse Listings" link
+- [x] Auth required; redirect to `/login`
 
-### Acceptance Criteria
-- [ ] Only whitelisted fields can be updated
-- [ ] Empty string for `name` does not clear it
-- [ ] `language` and `currency` validated against allowed values
-- [ ] Response includes updated user object
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/CartPage.tsx
+  frontend/components/cart/CartIcon.tsx
+  frontend/components/cart/CartItem.tsx
 
-### Files
-- `backend/internal/users/handler.go` — verify/improve `UpdateMe()`
+MODIFY:
+  frontend/app/layout.tsx           -- add /cart route
+  frontend/components/layout/Header.tsx  -- add CartIcon
+  frontend/app/CheckoutPage.tsx  -- read cart items from API
+```
 
 ---
 
-## TASK-017: GET /users/:id/profile — Public Profile
-**Epic:** Auth & Users | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-015 | **Go Status:** Done
+## TASK-008: Connect Listing to Cart to Checkout Flow
 
-### Description
-Verify public profile endpoint returns only non-PII data using `ToPublic()` method.
+**Phase:** 1 — Critical Frontend
+**Priority:** CRITICAL
+**Effort:** M (1 day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-007
 
-### Technical Notes
-Current `users/handler.go:GetProfile()` calls `user.ToPublic()` which returns `PublicUser{ID, Name, AvatarURL, Rating, ReviewCount, IsVerified, Location, CreatedAt}`. Verify no email, phone, or password_hash leaks.
+### Context
+The listing detail page and cart page exist but are not connected. A user cannot add a listing to the cart from the listing detail page, and the checkout does not know which items to charge for.
 
 ### Acceptance Criteria
-- [ ] Response matches `PublicUser` struct exactly
-- [ ] No email, phone, or password_hash in response
-- [ ] 404 for non-existent user ID
-- [ ] Blocked users return 404 (not their profile)
+- [x] "Add to Cart" button on `ListingDetailPage` calls `POST /api/v1/cart/items`
+- [x] Button shows loading state during API call and success/error feedback
+- [x] For Buy Now listings, "Buy Now" button adds to cart then redirects to `/cart`
+- [x] `CheckoutPage` reads items from cart API and passes to Stripe
+- [x] After successful payment, cart is cleared and user is redirected to `/orders/:id`
+- [x] Sold-out or expired listings show disabled state
 
-### Files
-- `backend/internal/users/handler.go` — verify `GetProfile()`
+### Files to Create / Modify
+```
+MODIFY:
+  frontend/app/ListingDetailPage.tsx   -- add Add to Cart / Buy Now buttons
+  frontend/app/CheckoutPage.tsx        -- load cart items, clear after payment
+  frontend/lib/api.ts                    -- add cart API functions
+```
 
 ---
 
-## TASK-018: POST /users/me/avatar — Cloudinary Upload
-**Epic:** Auth & Users | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-016 | **Go Status:** Not started
+## TASK-009: Watchlist / Favorites Page
 
-### Description
-Add avatar upload endpoint. Accept multipart file, upload to Cloudinary, update user's `avatar_url`.
+**Phase:** 1 — Critical Frontend
+**Priority:** CRITICAL
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-003
 
-### Technical Notes
-Use Cloudinary Go SDK. Accept `multipart/form-data` with `avatar` field. Validate file type (jpeg, png, webp) and size (< 5MB). Upload to `geocore/avatars/{userID}` folder. Return updated user object.
+### Context
+`WatchlistPage.tsx` exists as a stub but has no real data. The backend (TASK-003) provides the API. This connects the stub to the real API.
 
 ### Acceptance Criteria
-- [ ] POST /users/me/avatar accepts multipart file upload
-- [ ] File type validated: jpeg, png, webp only
-- [ ] File size validated: max 5MB
-- [ ] Uploaded to Cloudinary with proper folder structure
-- [ ] User `avatar_url` updated in database
-- [ ] Old avatar deleted from Cloudinary (if exists)
+- [x] Route `/watchlist` -> `WatchlistPage` — grid of watched listings
+- [x] Each listing card has a filled heart icon; clicking removes from watchlist
+- [x] Heart icon on all listing cards toggles watchlist membership (calls POST/DELETE watchlist API)
+- [x] Listing cards show price-drop indicator if price changed since added
+- [x] Empty state with "Start Browsing" link
+- [x] Auth required
 
-### Files
-- `backend/internal/users/handler.go` — add `UploadAvatar` method
-- `backend/internal/users/routes.go` — add route
-- `backend/pkg/cloudinary/cloudinary.go` — create Cloudinary upload helper
+### Files to Create / Modify
+```
+MODIFY:
+  frontend/app/WatchlistPage.tsx       -- connect to GET /api/v1/watchlist
+  frontend/components/listings/ListingCard.tsx  -- add heart toggle button
+  frontend/lib/api.ts                    -- add watchlist API functions
+```
 
 ---
 
-## TASK-019: Frontend Login Page
-**Epic:** Auth & Users | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-009, TASK-010 | **Go Status:** Not started
+## TASK-010: Legal Pages — Terms, Privacy, Cookie Policy
 
-### Description
-Create login page with email/password form, Zod validation, and Zustand auth store. Redirect to homepage on success.
+**Phase:** 1 — Critical Frontend
+**Priority:** CRITICAL
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Technical Notes
-Use shadcn/ui Input and Button. Zod schema: email required, password min 8. On submit, call `api.post('/auth/login')`, store tokens in auth store, redirect to `/`. Show error toast on failure.
+### Context
+No legal pages exist. Publishing a marketplace without Terms of Service and Privacy Policy is a legal liability. These pages must exist before any public launch. Content is placeholder/template — legal review is a separate concern.
 
 ### Acceptance Criteria
-- [ ] Login form with email and password fields
-- [ ] Client-side Zod validation with error messages
-- [ ] Successful login stores tokens and redirects to `/`
-- [ ] Failed login shows error message without revealing if email exists
-- [ ] Loading state during API call
-- [ ] Link to register page
-
-### Files
-- `frontend/src/app/(auth)/login/page.tsx` — login page
-- `frontend/src/stores/auth.ts` — Zustand auth store
-- `frontend/src/lib/validations/auth.ts` — Zod schemas
-
----
-
-## TASK-020: Frontend Register Page + Protected Routes
-**Epic:** Auth & Users | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-019 | **Go Status:** Not started
+- [x] Route `/legal/terms` -> `TermsOfServicePage` — Terms of Service content
+- [x] Route `/legal/privacy` -> `PrivacyPolicyPage` — Privacy Policy content
+- [x] Route `/legal/cookies` -> `CookiePolicyPage` — Cookie Policy content
+- [x] All three pages linked from `Footer`
+- [x] No auth required
+- [x] Last updated date shown on each page
 
-### Description
-Create registration page and protected route HOC/middleware. Unauthenticated users are redirected to `/login`.
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/legal/TermsOfServicePage.tsx
+  frontend/app/legal/PrivacyPolicyPage.tsx
+  frontend/app/legal/CookiePolicyPage.tsx
 
-### Technical Notes
-Registration form: name, email, password, confirm password. Create `ProtectedRoute` component or Next.js middleware that checks auth store for valid token. Use `useEffect` to redirect.
+MODIFY:
+  frontend/app/layout.tsx           -- add /legal/* routes
+  frontend/components/layout/Footer.tsx  -- add legal links
+```
 
-### Acceptance Criteria
-- [ ] Register form with name, email, password, confirm password
-- [ ] Zod validation: name 2-100 chars, email valid, password 8+ chars, passwords match
-- [ ] Successful registration auto-logs in and redirects to `/`
-- [ ] Protected route HOC redirects to `/login` if unauthenticated
-- [ ] Auth middleware in Next.js checks token on protected pages
-- [ ] Link to login page
-
-### Files
-- `frontend/src/app/(auth)/register/page.tsx` — register page
-- `frontend/src/components/auth/protected-route.tsx` — HOC
-- `frontend/src/middleware.ts` — Next.js auth middleware
-
 ---
-
-## EPIC 3 — Categories & Listings (TASK-021 → TASK-035)
 
----
+## TASK-011: Refund Page + Chargeback Page
 
-## TASK-021: Seed 10 Categories with EN + AR Names
-**Epic:** Categories & Listings | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-001 | **Go Status:** Done
+**Phase:** 1 — Critical Frontend
+**Priority:** CRITICAL
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-004
 
-### Description
-Verify `listings/seed.go:SeedCategories()` runs idempotently on startup with 10 categories (EN+AR).
+### Context
+Buyers have no way to initiate a refund or dispute from the UI. The backend dispute system (TASK-004) is implemented. This task adds the user-facing dispute flow.
 
-### Technical Notes
-Already implemented with count check. Seeds: Vehicles, Real Estate, Electronics, Furniture, Clothing, Jobs, Services, Animals & Pets, Sports & Hobbies, Kids & Baby. Each has emoji icon and sort_order.
+Reference: `mnbara-platform/apps/web/src/pages/RefundPolicyPage.tsx`
 
 ### Acceptance Criteria
-- [ ] 10 categories seeded on first startup
-- [ ] Re-running does not duplicate categories (idempotent)
-- [ ] Each category has `name_en`, `name_ar`, `slug`, `icon`, `sort_order`
-- [ ] Categories queryable via GET /categories
-
-### Files
-- `backend/internal/listings/seed.go` — verify existing implementation
-
----
-
-## TASK-022: GET /categories with Redis Cache
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-021 | **Go Status:** Partial
+- [x] Route `/refund-policy` -> `RefundPolicyPage` — static refund policy content (no auth)
+- [x] Route `/disputes/new` -> `NewDisputePage` — form to open a dispute against an order
+  - [x] Requires: order_id (dropdown from user's orders), reason (dropdown), evidence (textarea)
+  - [x] Submits to `POST /api/v1/disputes`
+  - [x] Success state shows dispute ID and next steps
+- [x] Route `/disputes` -> `MyDisputesPage` — list of user's disputes with status
+- [x] Auth required for `/disputes/*`
 
-### Description
-Add Redis caching (5min TTL) to GET /categories. Currently queries DB on every request.
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/RefundPolicyPage.tsx
+  frontend/app/disputes/NewDisputePage.tsx
+  frontend/app/disputes/MyDisputesPage.tsx
 
-### Technical Notes
-Use `pkg/redis` helpers. Cache key: `categories:tree`. Serialize to JSON before storing. Handle cache miss gracefully. Invalidate cache when categories are modified (future admin feature).
+MODIFY:
+  frontend/app/layout.tsx           -- add /refund-policy and /disputes/* routes
+  frontend/components/layout/Footer.tsx  -- add Refund Policy link
+```
 
-### Acceptance Criteria
-- [ ] First request populates Redis cache
-- [ ] Subsequent requests served from Redis (< 5ms)
-- [ ] Cache expires after 5 minutes
-- [ ] Cache miss falls back to DB query
-- [ ] Response includes tree with children
-
-### Files
-- `backend/internal/listings/handler.go` — add caching to `GetCategories()`
+### Phase 1 Gate
+> A test user can: register, browse listings, add to cart, proceed to checkout, complete Stripe test payment, see order at `/orders`, see order details at `/orders/:id`.
+> `/legal/terms`, `/legal/privacy`, `/legal/cookies` all render without errors.
+> Watchlist heart icon toggles on listing cards.
 
 ---
-
-## TASK-023: GET /listings — Full Filtering
-**Epic:** Categories & Listings | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-001 | **Go Status:** Done
-
-### Description
-Verify listing search/filter endpoint handles all query params: q, category_id, country, city, min_price, max_price, condition, type, sort, page, per_page.
 
-### Technical Notes
-Already implemented in `listings/handler.go:List()`. Uses ILIKE for text search, supports `newest`, `price_asc`, `price_desc`, `popular` sorts. Per page capped at 50. Returns `response.Meta` with pagination.
+# PHASE 2 — Trust & Guidance Pages
+**Goal:** New users understand the platform and feel safe using it.
 
-### Acceptance Criteria
-- [ ] All query params work correctly
-- [ ] Empty results return `[]` not `null`
-- [ ] Pagination meta is accurate
-- [ ] Featured listings appear first with default sort
-- [ ] Only active listings are returned
-- [ ] SQL injection safe (parameterized via GORM)
-
-### Files
-- `backend/internal/listings/handler.go` — verify `List()` implementation
-
 ---
-
-## TASK-024: GET /listings/:id — Preload + View Count
-**Epic:** Categories & Listings | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-023 | **Go Status:** Done
-
-### Description
-Verify listing detail preloads Images + Category and increments view_count asynchronously.
 
-### Technical Notes
-Already implemented with `go h.db.Model(&listing).UpdateColumn("view_count", gorm.Expr("view_count + 1"))`. The async goroutine means view count may lag by a fraction of a second.
+## TASK-012: Help Center & FAQ Page
 
-### Acceptance Criteria
-- [ ] Images and Category preloaded in response
-- [ ] `view_count` incremented without blocking response
-- [ ] 404 for non-existent or non-active listings
-- [ ] UUID validation on ID parameter
-
-### Files
-- `backend/internal/listings/handler.go` — verify `Get()`
-
----
+**Phase:** 2 — Trust & Guidance
+**Priority:** HIGH
+**Effort:** M (1 day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-## TASK-025: POST /listings — Create with Expiry
-**Epic:** Categories & Listings | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-004 | **Go Status:** Done
+### Context
+No help documentation exists. New users have no guidance on how to use the platform. This is a static content page with search functionality. Content is seeded with 20+ common Q&A items.
 
-### Description
-Verify listing creation sets `expires_at = now + 60 days` and `status = active`. Currently sets 2 months which is approximately 60 days.
+Reference: `mnbara-platform/apps/web/src/pages/HelpCenterPage.tsx` (38KB) and `mnbara-platform/apps/web/src/pages/FAQPage.tsx`
 
-### Technical Notes
-Current code: `expires := time.Now().AddDate(0, 2, 0)` — this gives ~60 days but varies (Feb = 59d). Consider using `time.Now().Add(60 * 24 * time.Hour)` for exact 60 days. Images saved inline from URL list.
-
 ### Acceptance Criteria
-- [ ] `expires_at` set to approximately 60 days from creation
-- [ ] `status` defaults to `active`
-- [ ] All required fields validated (title 5-200, description 10+, country, city)
-- [ ] Images created with sort_order, first image marked `is_cover = true`
-- [ ] Returns created listing with assigned UUID
-
-### Files
-- `backend/internal/listings/handler.go` — verify `Create()`
-
----
-
-## TASK-026: PUT /listings/:id — Owner-Only Update
-**Epic:** Categories & Listings | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-025 | **Go Status:** Done
+- [x] Route `/help` -> `HelpCenterPage` — categories grid (Buying, Selling, Payments, Account, Safety)
+- [x] Route `/help/faq` -> `FAQPage` — accordion with 20+ Q&A items grouped by category
+- [x] Route `/help/buying` -> `HelpBuyingPage` — buyer guide content
+- [x] Route `/help/selling` -> `HelpSellingPage` — seller guide content
+- [x] Client-side search filters FAQ items by keyword
+- [x] No auth required
+- [x] Footer links to `/help` and `/help/faq`
 
-### Description
-Verify update is owner-only and only allows whitelisted fields.
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/HelpCenterPage.tsx
+  frontend/app/FAQPage.tsx
+  frontend/app/HelpBuyingPage.tsx
+  frontend/app/HelpSellingPage.tsx
+  frontend/data/faq.ts         -- FAQ content array
 
-### Technical Notes
-Current whitelist: `title, description, price, currency, price_type, condition, country, city, address, status`. Uses `map[string]interface{}` pattern. Verify `user_id` ownership check.
+MODIFY:
+  frontend/app/layout.tsx             -- add /help/* routes
+  frontend/components/layout/Footer.tsx  -- add Help links
+```
 
-### Acceptance Criteria
-- [ ] Only listing owner can update
-- [ ] Non-whitelisted fields (e.g., `user_id`, `view_count`) are ignored
-- [ ] 404 if listing doesn't exist or user doesn't own it
-- [ ] Updated listing returned in response
-
-### Files
-- `backend/internal/listings/handler.go` — verify `Update()`
-
 ---
-
-## TASK-027: DELETE /listings/:id — Soft Delete with Auction Check
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-026 | **Go Status:** Partial
-
-### Description
-Enhance soft delete to block deletion if an active auction exists on the listing.
-
-### Technical Notes
-Current `Delete()` does owner-only soft delete but doesn't check for active auctions. Add query: `SELECT id FROM auctions WHERE listing_id = ? AND status = 'active'`. Return 409 Conflict if found.
-
-### Acceptance Criteria
-- [ ] Soft delete succeeds for listings without active auctions
-- [ ] 409 Conflict returned if listing has an active auction
-- [ ] Error message: "Cannot delete listing with active auction"
-- [ ] 404 if listing doesn't exist or user doesn't own it
-
-### Files
-- `backend/internal/listings/handler.go` — enhance `Delete()` with auction check
 
----
+## TASK-013: How It Works Page
 
-## TASK-028: POST /listings/:id/images — Cloudinary Upload
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-025 | **Go Status:** Not started
+**Phase:** 2 — Trust & Guidance
+**Priority:** HIGH
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Description
-Add image upload endpoint. Accept multipart files (up to 10), upload to Cloudinary, save as ListingImage records.
+### Context
+No onboarding or platform explanation page exists. New visitors have no context for what GeoCore is or how to use it. This page drives conversion from visitor to registered user.
 
-### Technical Notes
-Currently images are saved from URL strings in the Create handler. This task adds actual file upload. Max 10 images per listing. First image (or explicitly marked one) becomes `is_cover`. Validate file types: jpeg, png, webp.
+Reference: `mnbara-platform/apps/web/src/pages/HowItWorksPage.tsx` (10KB)
 
 ### Acceptance Criteria
-- [ ] POST accepts multipart form with up to 10 files
-- [ ] Files validated: jpeg/png/webp, max 5MB each
-- [ ] Uploaded to Cloudinary under `geocore/listings/{listingID}/`
-- [ ] ListingImage records created with correct sort_order
-- [ ] First image has `is_cover = true`
-- [ ] 400 if total images would exceed 10
-
-### Files
-- `backend/internal/listings/handler.go` — add `UploadImages` method
-- `backend/internal/listings/routes.go` — add route
-- `backend/pkg/cloudinary/cloudinary.go` — create if not from TASK-018
-
----
+- [x] Route `/how-it-works` -> `HowItWorksPage`
+- [x] Three sections: For Buyers, For Sellers, For Auction Bidders
+- [x] Step-by-step numbered steps with icons per section
+- [x] CTA buttons: "Start Buying" -> `/listings`, "Start Selling" -> `/sell`
+- [x] No auth required
+- [x] Linked from `Header` navigation and `Footer`
 
-## TASK-029: POST /listings/:id/favorite — Toggle
-**Epic:** Categories & Listings | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-001 | **Go Status:** Done
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/HowItWorksPage.tsx
 
-### Description
-Verify favorite toggle works correctly with atomic counter update.
+MODIFY:
+  frontend/app/layout.tsx             -- add /how-it-works route
+  frontend/components/layout/Header.tsx  -- add nav link
+  frontend/components/layout/Footer.tsx  -- add footer link
+```
 
-### Technical Notes
-Already implemented in `listings/handler.go:ToggleFavorite()`. Uses `gorm.Expr("favorite_count + 1")` and `gorm.Expr("favorite_count - 1")` for atomicity. Check for negative count edge case.
-
-### Acceptance Criteria
-- [ ] Toggle on: creates Favorite record, increments `favorite_count`
-- [ ] Toggle off: deletes Favorite record, decrements `favorite_count`
-- [ ] `favorite_count` never goes below 0
-- [ ] Works with concurrent requests (atomic DB operations)
-
-### Files
-- `backend/internal/listings/handler.go` — verify `ToggleFavorite()`
-
 ---
-
-## TASK-030: GET /listings/me — User's Listings
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-023 | **Go Status:** Partial
 
-### Description
-Fix route ordering issue and add status filter to user's listings endpoint.
+## TASK-014: Buyer Protection Page
 
-### Technical Notes
-**Critical bug:** In `routes.go`, `GET /listings/me` is registered AFTER `GET /listings/:id`, so Gin matches `/me` as an `:id` param. Fix by registering `/me` before `/:id`, or use a separate group. Add optional `?status=active|sold|expired|draft` filter.
+**Phase:** 2 — Trust & Guidance
+**Priority:** HIGH
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Acceptance Criteria
-- [ ] `GET /listings/me` correctly returns current user's listings (not treated as `:id`)
-- [ ] Optional `?status=` filter works
-- [ ] Images preloaded
-- [ ] Ordered by `created_at DESC`
-
-### Files
-- `backend/internal/listings/routes.go` — fix route ordering
-- `backend/internal/listings/handler.go` — add status filter to `GetMyListings()`
-
----
+### Context
+No buyer trust signals exist. Without a visible "Buyer Protection" guarantee, conversion rates suffer. This page explains the escrow system, dispute process, and money-back guarantees.
 
-## TASK-031: Cron — Expire Listings
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-025 | **Go Status:** Not started
+Reference: `mnbara-platform/apps/web/src/pages/BuyerProtectionPage.tsx` (8KB)
 
-### Description
-Create a background goroutine that runs at midnight to expire listings where `expires_at < NOW()` and `status = 'active'`.
-
-### Technical Notes
-Use `time.NewTicker` or a cron library like `robfig/cron`. Run as a goroutine started in `main.go`. Update query: `UPDATE listings SET status = 'expired' WHERE expires_at < NOW() AND status = 'active'`. Log number of expired listings.
-
 ### Acceptance Criteria
-- [ ] Cron runs at midnight UTC daily
-- [ ] Expired listings have status changed to `expired`
-- [ ] Number of expired listings logged
-- [ ] Does not affect deleted (soft-deleted) listings
-- [ ] Idempotent — running twice has no side effects
-
-### Files
-- `backend/internal/listings/cron.go` — create expiry cron
-- `backend/cmd/api/main.go` — start cron goroutine
-
----
+- [x] Route `/buyer-protection` -> `BuyerProtectionPage`
+- [x] Sections: Escrow System, Dispute Resolution, Money-Back Guarantee, Verified Sellers
+- [x] Trust badges/icons for each protection feature
+- [x] CTA: "Shop with Confidence" -> `/listings`
+- [x] No auth required
+- [x] Footer link
 
-## TASK-032: Frontend Homepage
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 5h | **Depends on:** TASK-009, TASK-010 | **Go Status:** Not started
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/BuyerProtectionPage.tsx
 
-### Description
-Create homepage with category bar, search input, featured listings grid, and active auction countdowns.
+MODIFY:
+  frontend/app/layout.tsx             -- add /buyer-protection route
+  frontend/components/layout/Footer.tsx
+```
 
-### Technical Notes
-Fetch categories for the horizontal scrollbar. Fetch featured listings with `?sort=newest&per_page=12`. Fetch active auctions with countdown timers. Use React Query for data fetching. shadcn/ui Card for listing cards.
-
-### Acceptance Criteria
-- [ ] Hero section with search bar
-- [ ] Horizontal scrollable category bar with emoji icons
-- [ ] Featured listings grid (responsive: 1/2/3 columns)
-- [ ] Active auctions section with countdown timers
-- [ ] Recently added section
-- [ ] Loading skeletons during data fetch
-- [ ] Mobile responsive
-
-### Files
-- `frontend/src/app/(main)/page.tsx` — homepage
-- `frontend/src/components/listings/listing-card.tsx`
-- `frontend/src/components/listings/category-bar.tsx`
-- `frontend/src/components/auctions/auction-countdown.tsx`
-
 ---
-
-## TASK-033: Frontend Listing Detail
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-032 | **Go Status:** Not started
-
-### Description
-Create listing detail page with image gallery, info panel, map, contact seller CTA, and similar listings.
-
-### Technical Notes
-Use React Query to fetch single listing. Image gallery with swipe/arrows. Leaflet or Mapbox for location map. "Contact Seller" button initiates chat (TASK-059). Similar listings from same category.
-
-### Acceptance Criteria
-- [ ] Image gallery with navigation (swipe + arrows)
-- [ ] Price, condition, location, description displayed
-- [ ] Seller card with name, rating, join date
-- [ ] Map showing listing location
-- [ ] "Contact Seller" button
-- [ ] Similar listings row (same category)
-- [ ] Share button, favorite toggle
-- [ ] SEO: dynamic meta tags from listing data
 
-### Files
-- `frontend/src/app/(main)/listings/[id]/page.tsx`
-- `frontend/src/components/listings/image-gallery.tsx`
-- `frontend/src/components/listings/seller-card.tsx`
+## TASK-015: Seller Protection Page
 
----
-
-## TASK-034: Frontend Create Listing Wizard
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 5h | **Depends on:** TASK-032 | **Go Status:** Not started
+**Phase:** 2 — Trust & Guidance
+**Priority:** HIGH
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Description
-3-step wizard for creating a listing with Zod validation per step.
+### Context
+Sellers need to understand the platform's protections for them — fraud prevention, chargeback protection, secure payouts. Without this, seller acquisition suffers.
 
-### Technical Notes
-Step 1: Category + Title + Description. Step 2: Price + Condition + Location (with map picker). Step 3: Photos (drag-and-drop) + Review summary. Use Zustand for wizard state persistence across steps. Zod schema per step.
+Reference: `mnbara-platform/apps/web/src/pages/SellerProtectionPage.tsx` (7KB)
 
 ### Acceptance Criteria
-- [ ] 3-step wizard with progress indicator
-- [ ] Step 1: category picker, title (5-200), description (10+)
-- [ ] Step 2: price, price type, condition, country, city, map location picker
-- [ ] Step 3: drag-and-drop image upload (up to 10), review all data
-- [ ] Zod validation errors shown inline per field
-- [ ] Back/Next navigation preserves state
-- [ ] Submit creates listing via API
+- [x] Route `/seller-protection` -> `SellerProtectionPage`
+- [x] Sections: Fraud Prevention, Secure Payouts, Chargeback Coverage, Verified Buyers
+- [x] CTA: "Start Selling" -> `/sell`
+- [x] No auth required
+- [x] Footer link
 
-### Files
-- `frontend/src/app/(main)/listings/create/page.tsx`
-- `frontend/src/components/listings/create-wizard/step-1.tsx`
-- `frontend/src/components/listings/create-wizard/step-2.tsx`
-- `frontend/src/components/listings/create-wizard/step-3.tsx`
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/SellerProtectionPage.tsx
 
+MODIFY:
+  frontend/app/layout.tsx             -- add /seller-protection route
+  frontend/components/layout/Footer.tsx
+```
+
 ---
 
-## TASK-035: Frontend Search Results
-**Epic:** Categories & Listings | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-032 | **Go Status:** Not started
+## TASK-016: About Us Page
 
-### Description
-Search results page with filters sidebar, listing grid, sort dropdown, and pagination.
+**Phase:** 2 — Trust & Guidance
+**Priority:** MEDIUM
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Technical Notes
-URL query params drive filters (synced with API params). Sidebar: category, price range slider, condition checkboxes, type. Sort: newest, price asc/desc, popular. Pagination with page numbers.
+### Context
+No About page exists. Investors, sellers, and press need to understand the company mission. Content is placeholder — replace with real content before launch.
 
 ### Acceptance Criteria
-- [ ] Filter sidebar with category, price range, condition, type
-- [ ] URL params sync with filter state (bookmarkable)
-- [ ] Grid view of listing cards
-- [ ] Sort dropdown
-- [ ] Pagination controls with page numbers
-- [ ] "No results found" empty state
-- [ ] Filters update results in real-time (debounced)
-
-### Files
-- `frontend/src/app/(main)/search/page.tsx`
-- `frontend/src/components/search/filter-sidebar.tsx`
-- `frontend/src/components/search/sort-dropdown.tsx`
+- [x] Route `/about` -> `AboutPage`
+- [x] Sections: Mission, Team (placeholder), Values, Contact
+- [x] No auth required
+- [x] Footer link
 
----
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/AboutPage.tsx
 
-## EPIC 4 — Auctions (TASK-036 → TASK-047)
+MODIFY:
+  frontend/app/layout.tsx             -- add /about route
+  frontend/components/layout/Footer.tsx
+```
 
 ---
-
-## TASK-036: POST /auctions — Create with Validation
-**Epic:** Auctions | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-025 | **Go Status:** Done
-
-### Description
-Verify auction creation validates time range (max 720 hours = 30 days) and links to existing listing.
-
-### Technical Notes
-Already implemented in `auctions/handler.go:Create()` with `DurationHrs` binding `min=1,max=720`. Verify ownership of the linked listing. Verify no existing active auction on same listing (unique index).
-
-### Acceptance Criteria
-- [ ] Duration validated: 1-720 hours
-- [ ] Linked listing must exist and belong to the seller
-- [ ] No duplicate active auction on same listing (DB unique index)
-- [ ] Start price, reserve price, buy-now price validated
-- [ ] Returns created auction with computed `ends_at`
-
-### Files
-- `backend/internal/auctions/handler.go` — verify `Create()`
 
----
+## TASK-017: Shipping & Delivery Info Page
 
-## TASK-037: GET /auctions — Active List with time_remaining
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-036 | **Go Status:** Partial
+**Phase:** 2 — Trust & Guidance
+**Priority:** MEDIUM
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Description
-Enhance auction list to include computed `time_remaining` field (seconds until end).
+### Context
+Buyers need to understand shipping timelines, delivery options, and international shipping policies before they purchase. Absence of this info reduces conversion.
 
-### Technical Notes
-Currently returns raw `ends_at`. Add a computed field in the response: `time_remaining = ends_at - now()` in seconds. Could be done in Go code after query, or as a DB computed column.
+Reference: `mnbara-platform/apps/web/src/pages/ShippingInfoPage.tsx`
 
 ### Acceptance Criteria
-- [ ] Each auction in list has `time_remaining` in seconds
-- [ ] Only active auctions with `ends_at > now()` returned
-- [ ] Sorted by `ends_at ASC` (ending soonest first)
-- [ ] Paginated with meta
-
-### Files
-- `backend/internal/auctions/handler.go` — add `time_remaining` to `List()` response
-
----
-
-## TASK-038: GET /auctions/:id — Detail with Reserve Status
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-037 | **Go Status:** Partial
-
-### Description
-Enhance auction detail to include `is_reserve_met` boolean and `time_remaining` field.
-
-### Technical Notes
-`is_reserve_met = auction.CurrentBid >= *auction.ReservePrice` (if reserve exists). Already preloads top 20 bids sorted by amount DESC.
+- [x] Route `/shipping` -> `ShippingInfoPage`
+- [x] Sections: Domestic Shipping, International Shipping, Delivery Times, Tracking
+- [x] Table of typical delivery times by region
+- [x] No auth required
+- [x] Footer link
 
-### Acceptance Criteria
-- [ ] Response includes `is_reserve_met` boolean
-- [ ] Response includes `time_remaining` in seconds
-- [ ] Top 20 bids included, sorted by amount DESC
-- [ ] Listing details preloaded (title, images)
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/ShippingInfoPage.tsx
 
-### Files
-- `backend/internal/auctions/handler.go` — enhance `Get()` response
+MODIFY:
+  frontend/app/layout.tsx             -- add /shipping route
+  frontend/components/layout/Footer.tsx
+```
 
 ---
-
-## TASK-039: POST /auctions/:id/bid — SELECT FOR UPDATE TX
-**Epic:** Auctions | **Type:** bug | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-036 | **Go Status:** Partial
-
-### Description
-Fix race condition in PlaceBid by adding `SELECT FOR UPDATE` pessimistic locking inside the transaction.
-
-### Technical Notes
-Current code reads auction outside TX then updates inside TX — classic TOCTOU race. Fix: move the entire read-check-update into a single TX with `tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&auction, ...)`. Validate `amount > current_bid`, block self-bid, check auction not ended.
 
-### Acceptance Criteria
-- [ ] Auction row locked with `SELECT FOR UPDATE` during bid
-- [ ] Concurrent bids serialize correctly (only highest wins)
-- [ ] Self-bid rejected with 400
-- [ ] Bid on ended auction rejected with 400
-- [ ] Bid below current_bid rejected with 400 and message showing minimum
-- [ ] Redis Pub/Sub broadcast after successful bid
-
-### Files
-- `backend/internal/auctions/handler.go` — rewrite `PlaceBid()` with locking
+## TASK-018: Fee Calculator Page
 
----
+**Phase:** 2 — Trust & Guidance
+**Priority:** MEDIUM
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-## TASK-040: Auto-Bid Proxy
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-039 | **Go Status:** Not started
+### Context
+Sellers do not know how much they will receive after platform and payment fees. A fee calculator builds trust and reduces seller churn. All calculations are done client-side using constants.
 
-### Description
-After a new bid, check other bidders' auto-bid max amounts and automatically outbid incrementally.
+Reference: `mnbara-platform/apps/web/src/pages/FeesPricingPage.tsx` (12KB)
 
-### Technical Notes
-PHP had this as a core feature. After each bid: query all Bids where `is_auto = true AND max_amount > current_bid AND user_id != current_bidder`. Find the highest `max_amount` among them. Place an automatic bid at `current_bid + increment` on their behalf. The increment should be configurable (default: 1% of current bid or $1, whichever is higher).
-
 ### Acceptance Criteria
-- [ ] Auto-bid triggers after any manual bid
-- [ ] Finds highest competing auto-bid max_amount
-- [ ] Places incremental bid on behalf of auto-bidder
-- [ ] Auto-bid marked with `is_auto = true`
-- [ ] Stops when max_amount reached
-- [ ] Broadcasts auto-bid via WebSocket
-- [ ] Does not create infinite self-bidding loops
-
-### Files
-- `backend/internal/auctions/handler.go` — add auto-bid logic after PlaceBid
-- `backend/internal/auctions/autobid.go` — extract auto-bid logic
+- [x] Route `/fees` -> `FeesPricingPage` — fee schedule table (listing fees, success fees by category)
+- [x] Route `/fees/calculator` -> `FeeCalculatorPage` — interactive calculator
+  - [x] Input: sale price
+  - [x] Shows: platform fee, payment processing fee, net payout
+  - [x] Real-time calculation (no API call, use frontend constants)
+- [x] No auth required
 
----
-
-## TASK-041: Anti-Sniping Extension
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-039 | **Go Status:** Not started
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/FeesPricingPage.tsx
+  frontend/app/FeeCalculatorPage.tsx
 
-### Description
-If a bid is placed within 5 minutes of auction end, extend `ends_at` by 5 minutes. Max 3 extensions.
+MODIFY:
+  frontend/app/layout.tsx             -- add /fees and /fees/calculator routes
+  frontend/components/layout/Footer.tsx
+  frontend/app/HelpSellingPage.tsx  -- link to fee calculator
+```
 
-### Technical Notes
-PHP had `auction_extension_check()`. Track extension count (add `extension_count int` to Auction model, default 0). After bid: if `ends_at - now() < 5min && extension_count < 3`, update `ends_at += 5min` and increment `extension_count`. Broadcast updated `ends_at` via WebSocket.
+### Phase 2 Gate
+> All 7 pages (TASK-012 through TASK-018) render at their routes without errors.
+> Footer has working links to: /legal/terms, /legal/privacy, /how-it-works, /buyer-protection, /seller-protection, /help, /fees, /about, /shipping.
 
-### Acceptance Criteria
-- [ ] Bid within 5 min of end extends by 5 min
-- [ ] Maximum 3 extensions (15 min total)
-- [ ] `extension_count` field tracks extensions
-- [ ] WebSocket broadcasts updated `ends_at`
-- [ ] Extensions visible in auction detail response
+---
 
-### Files
-- `backend/internal/auctions/model.go` — add `ExtensionCount` field
-- `backend/internal/auctions/handler.go` — add anti-sniping logic in PlaceBid
+# PHASE 3 — Seller Tools
+**Goal:** Sellers can manage their business, see analytics, and engage with buyers.
 
 ---
 
-## TASK-042: Auction WebSocket Hub — Broadcast Format
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-039 | **Go Status:** Partial
+## TASK-019: Seller Analytics Dashboard Page
 
-### Description
-Standardize WS broadcast format to `{type, current_bid, bid_count, ends_at}` on every bid.
+**Phase:** 3 — Seller Tools
+**Priority:** HIGH
+**Effort:** M (1 day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-005
 
-### Technical Notes
-Currently broadcasts raw string via Redis Pub/Sub: `{"bid": X, "user": "Y"}`. Standardize to `{type: "bid_update", current_bid, bid_count, ends_at, bidder_name}`. Add integration between HTTP handler broadcast and WS Hub (currently disconnected — Hub only receives from WS clients, not from HTTP handlers).
+### Context
+Sellers have no visibility into their performance. This page connects to the analytics backend from TASK-005.
 
+Reference: `mnbara-platform/apps/web/src/pages/seller/SellerAnalytics.tsx` (8KB)
+
 ### Acceptance Criteria
-- [ ] Bid broadcasts include `{type, current_bid, bid_count, ends_at}`
-- [ ] HTTP handler PlaceBid triggers WS Hub broadcast (not just Redis)
-- [ ] Auction end broadcasts `{type: "auction_ended", winner_id}`
-- [ ] All connected WS clients receive updates within 100ms
+- [x] Route `/seller/analytics` -> `SellerAnalyticsPage`
+- [x] Metric cards: Total Revenue, Total Orders, Active Listings, Total Views, Avg Rating
+- [x] Revenue chart: 30-day line chart (using data from `GET /api/v1/analytics/seller/revenue?period=30d`)
+- [x] Listings breakdown table: title, views, favorites, orders per listing
+- [x] Period filter: 7d / 30d / 90d / 1y
+- [x] Auth required, only shows own data
+
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/seller/SellerAnalyticsPage.tsx
+  frontend/components/seller/RevenueChart.tsx
+  frontend/components/seller/MetricCard.tsx
 
-### Files
-- `backend/internal/auctions/websocket.go` — standardize broadcast format
-- `backend/internal/auctions/handler.go` — integrate Hub broadcast into PlaceBid
+MODIFY:
+  frontend/app/layout.tsx                          -- add /seller/analytics route
+  frontend/app/DashboardPage.tsx          -- add "View Analytics" link
+```
 
 ---
 
-## TASK-043: GET /ws/auctions/:id — WebSocket Upgrade
-**Epic:** Auctions | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-042 | **Go Status:** Done
+## TASK-020: Seller Storefront Analytics
 
-### Description
-Verify WebSocket upgrade endpoint works. Already implemented with `ServeWS` in `main.go`.
+**Phase:** 3 — Seller Tools
+**Priority:** MEDIUM
+**Effort:** S (half day)
+**Layer:** Both
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-019, TASK-005
 
-### Technical Notes
-Route: `r.GET("/ws/auctions/:id", ...)` in `main.go`. Uses Gorilla WebSocket upgrader with `CheckOrigin: true` (should be restricted in production). Verify client lifecycle: register → readPump + writePump → unregister on disconnect.
+### Context
+`MyStorefrontPage.tsx` (27KB) exists but has no analytics tab. Sellers need to know how much traffic their storefront gets.
 
 ### Acceptance Criteria
-- [ ] WS connection upgrades successfully
-- [ ] Client registered in correct auction room
-- [ ] Client removed on disconnect
-- [ ] Multiple clients in same room all receive broadcasts
-- [ ] Production: restrict `CheckOrigin` to `FRONTEND_URL`
+- [x] `GET /api/v1/analytics/storefront` — returns storefront-specific metrics (page views, follower count, conversion rate)
+- [x] `MyStorefrontPage` gains an "Analytics" tab alongside the existing listings tab
+- [x] Tab shows: storefront views (7d/30d), top performing listings, conversion rate
 
-### Files
-- `backend/internal/auctions/websocket.go` — verify and restrict CheckOrigin
+### Files to Create / Modify
+```
+MODIFY:
+  backend/internal/analytics/handler.go                       -- add StorefrontAnalytics handler
+  backend/internal/analytics/routes.go                        -- add GET /analytics/storefront
+  frontend/app/MyStorefrontPage.tsx       -- add Analytics tab
+```
 
 ---
 
-## TASK-044: Auction End Cron
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-041 | **Go Status:** Not started
+## TASK-021: Loyalty Program Frontend
 
-### Description
-Create a cron job that runs every minute to end expired auctions, set winner_id, and notify participants.
+**Phase:** 3 — Seller Tools
+**Priority:** MEDIUM
+**Effort:** M (1 day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Technical Notes
-Query: `SELECT * FROM auctions WHERE status = 'active' AND ends_at <= NOW()`. For each: set `status = 'ended'`, determine winner (highest bid), set `winner_id`. If reserve price not met, set `status = 'ended'` with no winner. Broadcast `{type: "auction_ended"}` via WS. Future: send email notifications.
+### Context
+`backend/internal/loyalty/` is fully implemented (handler, model, routes -- 14KB handler). There is no frontend for it. Users and sellers cannot see their points, tier, or redeem rewards.
 
 ### Acceptance Criteria
-- [ ] Cron runs every 60 seconds
-- [ ] Expired auctions have status set to `ended`
-- [ ] Winner determined by highest bid amount
-- [ ] If reserve not met, no winner set
-- [ ] WS broadcast `auction_ended` to all connected clients
-- [ ] Log auction end events with auction ID and winner info
+- [x] Route `/loyalty` -> `LoyaltyPage` — user's loyalty dashboard
+  - Current tier badge (Bronze/Silver/Gold/Platinum)
+  - Points balance with progress bar to next tier
+  - Points history list (earn/spend events)
+  - Available rewards to redeem
+- [x] `PointsDisplay` widget added to `DashboardPage` and `ProfilePage`
+- [x] `TierBadge` component shown on user profile cards
+- [x] Connects to existing `GET /api/v1/loyalty/...` endpoints
 
-### Files
-- `backend/internal/auctions/cron.go` — create auction end cron
-- `backend/cmd/api/main.go` — start cron goroutine
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/LoyaltyPage.tsx
+  frontend/components/loyalty/PointsDisplay.tsx
+  frontend/components/loyalty/TierBadge.tsx
+  frontend/components/loyalty/RewardCard.tsx
 
----
+MODIFY:
+  frontend/app/layout.tsx                          -- add /loyalty route
+  frontend/app/DashboardPage.tsx          -- add PointsDisplay widget
+  frontend/app/ProfilePage.tsx            -- add TierBadge
+```
 
-## TASK-045: Frontend Auctions List
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-032 | **Go Status:** Not started
+---
 
-### Description
-Create auctions listing page with cards showing live countdown timers, current bid, and bid count.
+## TASK-022: Notification Settings Page
 
-### Technical Notes
-Fetch from `GET /api/v1/auctions`. Each card shows: title, current bid, bid count, countdown timer. Timer updates in real-time using `setInterval`. Clicking card navigates to auction detail page.
+**Phase:** 3 — Seller Tools
+**Priority:** MEDIUM
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Acceptance Criteria
-- [ ] Grid of auction cards
-- [ ] Live countdown timer on each card (updates every second)
-- [ ] Current bid and bid count displayed
-- [ ] Cards sorted by ending soonest
-- [ ] "Ending Soon" badge for auctions ending in < 1 hour
-- [ ] Mobile responsive
+### Context
+Users have no way to control what notifications they receive. The notifications backend (`internal/notifications/`) handles delivery but preferences are not exposed to users.
 
-### Files
-- `frontend/src/app/(main)/auctions/page.tsx`
-- `frontend/src/components/auctions/auction-card.tsx`
-- `frontend/src/components/auctions/countdown-timer.tsx`
+Reference: `mnbara-platform/apps/web/src/pages/features/NotificationSettingsPage.tsx` (9KB)
 
----
+### Acceptance Criteria
+- [x] Route `/settings/notifications` -> `NotificationSettingsPage`
+- [x] Toggle groups: Email Notifications, Push Notifications, SMS Notifications
+- [x] Per-event toggles: new message, auction outbid, order update, price drop on watchlist, promo offers
+- [x] Save button calls `PATCH /api/v1/users/me/notification-preferences`
+- [x] Backend endpoint added to `users/handler.go`
 
-## TASK-046: Frontend Auction Detail — Live
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 5h | **Depends on:** TASK-045 | **Go Status:** Not started
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/settings/NotificationSettingsPage.tsx
 
-### Description
-Create auction detail page with live bid ticker, countdown, bid history, and place bid modal.
+MODIFY:
+  backend/internal/users/handler.go                           -- add PATCH notification-preferences endpoint
+  backend/internal/users/routes.go                            -- register route
+  frontend/app/layout.tsx                          -- add /settings/notifications route
+  frontend/app/ProfilePage.tsx            -- link to notification settings
+```
 
-### Technical Notes
-WebSocket connection for live updates. Bid ticker shows bids as they come in. Place bid modal with amount input and auto-bid option (max amount). Bid history table with timestamps. Countdown timer with anti-sniping extension indicator.
+---
 
-### Acceptance Criteria
-- [ ] Live countdown timer (large, prominent)
-- [ ] Current bid display updates in real-time via WebSocket
-- [ ] Bid history table with bidder name, amount, time
-- [ ] "Place Bid" button opens modal
-- [ ] Bid modal: amount input (min = current + increment), auto-bid toggle with max
-- [ ] Toast notification on outbid
-- [ ] Anti-sniping indicator (countdown extension notification)
-- [ ] "Auction Ended" state with winner display
+## TASK-023: Deals & Promotions — Backend + Frontend
 
-### Files
-- `frontend/src/app/(main)/auctions/[id]/page.tsx`
-- `frontend/src/components/auctions/bid-ticker.tsx`
-- `frontend/src/components/auctions/place-bid-modal.tsx`
-- `frontend/src/components/auctions/bid-history.tsx`
+**Phase:** 3 — Seller Tools
+**Priority:** MEDIUM
+**Effort:** L (2 days)
+**Layer:** Both
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-001
 
----
+### Context
+No deals or promotional listings exist. Sellers cannot run sales. The platform cannot feature time-limited deals to drive traffic.
 
-## TASK-047: Frontend useAuctionWebSocket Hook
-**Epic:** Auctions | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-046 | **Go Status:** Not started
+Reference: `mnbara-platform/apps/web/src/pages/DealsPage.tsx` (17KB)
 
-### Description
-Create custom React hook for auction WebSocket connection with auto-reconnect.
+### Acceptance Criteria
+- [x] `deals` table: deal_id, listing_id, seller_id, original_price, deal_price, discount_pct, start_at, end_at, status
+- [x] `POST /api/v1/deals` — seller creates a deal for their listing
+- [x] `GET /api/v1/deals` — public list of active deals, sorted by discount_pct desc
+- [x] `GET /api/v1/deals/:id` — single deal detail
+- [x] Cron job marks expired deals as `expired` (similar to listing expiry cron)
+- [x] Route `/deals` -> `DealsPage` — grid of active deals with countdown timer and discount badge
+- [x] `DealBadge` component shown on listing cards when listing has active deal
+- [x] Auth required to create; no auth to view
 
-### Technical Notes
-Connect to `ws://localhost:8080/ws/auctions/{id}`. Parse incoming messages: `bid_update` → update bid state, `auction_ended` → update status. Auto-reconnect on disconnect with exponential backoff (1s, 2s, 4s, max 30s). Clean up on component unmount.
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/deals/model.go
+  backend/internal/deals/handler.go
+  backend/internal/deals/routes.go
+  backend/migrations/007_create_deals.up.sql
+  backend/migrations/007_create_deals.down.sql
+  frontend/app/DealsPage.tsx
+  frontend/components/listings/DealBadge.tsx
 
-### Acceptance Criteria
-- [ ] Hook connects to auction WS on mount
-- [ ] Parses `bid_update` messages and updates auction state
-- [ ] Parses `auction_ended` messages
-- [ ] Auto-reconnects on disconnect with backoff
-- [ ] Cleans up connection on unmount
-- [ ] Connection status exposed (connecting/connected/disconnected)
+MODIFY:
+  backend/cmd/api/main.go                                      -- register deals routes
+  frontend/app/layout.tsx                           -- add /deals route
+  frontend/components/layout/Header.tsx      -- add Deals nav link
+```
 
-### Files
-- `frontend/src/hooks/use-auction-websocket.ts`
+### Phase 3 Gate
+> All Phase 3 deliverables complete. Seller analytics, loyalty frontend, notification settings, and deals pages render without errors.
+> All new backend routes return 200 with valid test JWT.
 
 ---
 
-## EPIC 5 — Chat (TASK-048 → TASK-059)
+# PHASE 4 — Support & Communication
+**Goal:** Users can get help. Sellers can be reached. Admins see business metrics.
 
 ---
 
-## TASK-048: POST /chat/conversations — Create or Return Existing
-**Epic:** Chat | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-004 | **Go Status:** Done
+## TASK-024: Contact & Support Page
 
-### Description
-Verify conversation creation logic: finds existing conversation between two users, or creates new one linked to listing.
+**Phase:** 4 — Support & Communication
+**Priority:** ?? HIGH
+**Effort:** S (half day)
+**Layer:** Frontend (React/Vite)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Technical Notes
-Already implemented in `chat/handler.go:CreateOrGetConversation()`. Uses subquery to find common conversations. Verify the deduplicate logic works when listing_id is null (general chat).
+### Context
+No contact mechanism exists. Users encountering problems have no way to reach support.
 
+Reference: `mnbara-platform/apps/web/src/pages/ContactSupportPage.tsx` (27KB)
+
 ### Acceptance Criteria
-- [ ] Existing conversation returned if one exists between the pair
-- [ ] New conversation created with both members if none exists
-- [ ] `listing_id` optionally linked
-- [ ] Members preloaded in response
-- [ ] Cannot create conversation with yourself
+- [x] Route `/contact` -> `ContactSupportPage`
+- [x] Form fields: name, email, subject (dropdown), message (min 20 chars)
+- [x] Submit calls `POST /api/v1/support/contact` (new backend endpoint)
+- [x] Backend stores message and sends email to admin via existing SMTP job
+- [x] Success state shown after submission
+- [x] No auth required, but pre-fill name/email if logged in
+- [x] Linked from `Footer` and from Help pages
+
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/ContactSupportPage.tsx
+  backend/internal/support/handler.go         — ContactForm handler
+  backend/internal/support/routes.go          — RegisterRoutes(v1, db)
 
-### Files
-- `backend/internal/chat/handler.go` — verify `CreateOrGetConversation()`
+MODIFY:
+  backend/cmd/api/main.go                      — register support routes
+  frontend/app/layout.tsx           — add /contact route
+  frontend/components/layout/Footer.tsx
+```
 
 ---
 
-## TASK-049: GET /chat/conversations — Ordered with Unread
-**Epic:** Chat | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-048 | **Go Status:** Partial
+## TASK-025: Support Ticket System
 
-### Description
-Verify conversation list is ordered by last_msg_at DESC and includes unread count per conversation.
+**Phase:** 4 — Support & Communication
+**Priority:** ?? MEDIUM
+**Effort:** M (1 day)
+**Layer:** Both
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-024
 
-### Technical Notes
-Current implementation queries ConversationMember first, then fetches Conversations. The `unread_count` on ConversationMember tracks unreads per user. Verify ordering handles NULL `last_msg_at` (conversations with no messages).
+### Context
+One-off contact forms don't scale. Users need to track the status of their support requests. This adds a ticketing system on top of the contact backend.
 
+Reference: `mnbara-platform/apps/web/src/pages/features/SupportTicketsPage.tsx` (10KB)
+
 ### Acceptance Criteria
-- [ ] Conversations ordered by `last_msg_at DESC NULLS LAST`
-- [ ] Each conversation includes `unread_count` for requesting user
-- [ ] Members preloaded (to show other user's name/avatar)
-- [ ] Empty conversations (no messages yet) appear at end
+- [x] `support_tickets` table: ticket_id, user_id, subject, status (open/in_progress/resolved/closed), priority, messages[]
+- [x] `GET /api/v1/support/tickets` — user's ticket list
+- [x] `GET /api/v1/support/tickets/:id` — ticket detail with message thread
+- [x] `POST /api/v1/support/tickets/:id/messages` — add reply to ticket
+- [x] Admin can change ticket status via existing admin panel
+- [x] Route `/support/tickets` -> `SupportTicketsPage` — list of user's tickets
+- [x] Route `/support/tickets/:id` -> `SupportTicketDetailPage` — message thread view
+- [x] Auth required
 
-### Files
-- `backend/internal/chat/handler.go` — verify `GetConversations()`
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/support/model.go            — Ticket, TicketMessage structs
+  backend/migrations/008_create_support_tickets.up.sql
+  backend/migrations/008_create_support_tickets.down.sql
+  frontend/app/support/SupportTicketsPage.tsx
+  frontend/app/support/SupportTicketDetailPage.tsx
 
----
+MODIFY:
+  backend/internal/support/handler.go          — add ticket CRUD handlers
+  backend/internal/support/routes.go           — add ticket routes
+  frontend/app/layout.tsx           — add /support/tickets routes
+  frontend/app/DashboardPage.tsx  — add "My Tickets" link
+```
 
-## TASK-050: GET /chat/conversations/:id/messages — Paginated
-**Epic:** Chat | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-049 | **Go Status:** Partial
+---
 
-### Description
-Add cursor-based pagination to messages endpoint. Currently returns last 100 messages.
+## TASK-026: Founder / Owner Dashboard
 
-### Technical Notes
-Add `?before={message_id}` cursor for loading older messages. Return in ASC order (oldest first within page). Limit 50 per page. Membership verification already exists.
+**Phase:** 4 — Support & Communication
+**Priority:** ?? MEDIUM
+**Effort:** M (1 day)
+**Layer:** Both
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-005
 
-### Acceptance Criteria
-- [ ] Returns messages in chronological order (ASC)
-- [ ] `?before={id}` returns older messages (cursor pagination)
-- [ ] Max 50 messages per request
-- [ ] Membership verified — 403 for non-members
-- [ ] Read receipts updated on fetch (unread_count reset)
-- [ ] Response includes `has_more` boolean
+### Context
+The existing admin panel (`/admin`) is operational. However, there is no high-level business overview — P&L, user growth, GMV. The Founder Dashboard is a read-only view for business owners.
 
-### Files
-- `backend/internal/chat/handler.go` — enhance `GetMessages()` with pagination
+Reference: `mnbara-platform/apps/web/src/pages/founder/FounderDashboard.tsx` (8KB)
 
----
+### Acceptance Criteria
+- [x] `GET /api/v1/analytics/platform` — platform-wide metrics (admin-only):
+  - `total_users`, `new_users_7d`, `new_users_30d`
+  - `total_listings`, `active_listings`
+  - `total_orders`, `gmv_30d` (gross merchandise value)
+  - `total_revenue` (platform fee collected)
+  - `open_disputes`, `resolved_disputes`
+- [x] Route `/founder` -> `FounderDashboard` — role-gated to `admin` or `super_admin`
+- [x] Metric cards with sparklines (7-day mini-chart)
+- [x] Top categories by revenue table
+- [x] Redirect non-admin users to `/` with 403 message
 
-## TASK-051: POST /chat/conversations/:id/messages — Send
-**Epic:** Chat | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-050 | **Go Status:** Done
+### Files to Create / Modify
+```
+CREATE:
+  frontend/app/founder/FounderDashboard.tsx
+  frontend/components/founder/PlatformMetricCard.tsx
 
-### Description
-Verify message sending updates `last_msg_at` and increments `unread_count` for other members.
+MODIFY:
+  backend/internal/analytics/handler.go        — add PlatformMetrics handler (admin-only)
+  backend/internal/analytics/routes.go         — add GET /analytics/platform
+  frontend/app/layout.tsx           — add /founder route with admin guard
+```
 
-### Technical Notes
-Already implemented in `chat/handler.go:SendMessage()`. Verifies membership, creates message, updates conversation `last_msg_at`, increments other members' `unread_count`. Verify message `type` field defaults to "text".
+### Phase 4 Gate
+> Admin sees platform metrics at `/founder`.
+> User can submit contact form and receive confirmation.
+> User can view their support tickets at `/support/tickets`.
 
-### Acceptance Criteria
-- [ ] Message saved with correct `sender_id` and `conversation_id`
-- [ ] `last_msg_at` updated on conversation
-- [ ] Other members' `unread_count` incremented
-- [ ] Non-member gets 403
-- [ ] Content required, not empty
+---
 
-### Files
-- `backend/internal/chat/handler.go` — verify `SendMessage()`
+# PHASE 5 — Infrastructure & Observability
+**Goal:** Production is monitored. Errors are visible. All job stubs are implemented. PayPal works.
 
 ---
 
-## TASK-052: Chat WS Hub — Room Broadcast
-**Epic:** Chat | **Type:** bug | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-051 | **Go Status:** Partial
+## TASK-027: Sentry Error Tracking — Frontend + Backend
 
-### Description
-Fix Chat WS Hub: route param mismatch and duplicate Hub creation. Messages sent via REST must reach WS clients.
+**Phase:** 5 — Infrastructure & Observability
+**Priority:** ?? HIGH
+**Effort:** S (half day)
+**Layer:** Both
+**Status:** [x] Completed
+**Depends on:** None
 
-### Technical Notes
-**Bug 1:** `chat/websocket.go:ServeWS()` reads `c.Param("conversationId")` but route defines `:id`. Fix: change to `c.Param("id")`. **Bug 2:** `main.go` creates chatHub and `chat/routes.go` creates another Hub. Consolidate. **Bug 3:** REST `SendMessage()` doesn't broadcast to WS Hub — add Hub broadcast after message creation.
+### Context
+GeoCore Next has no error tracking. Production bugs are invisible. Sentry catches and groups unhandled errors with full stack traces.
 
 ### Acceptance Criteria
-- [ ] WS connects to correct conversation room
-- [ ] Single Hub instance (not duplicated)
-- [ ] REST message send triggers WS broadcast to room
-- [ ] WS message includes `{type, content, sender_id, created_at}`
-- [ ] Only connected members of conversation receive message
+- [x] Frontend: `@sentry/react` installed, initialized in `main.tsx` with `VITE_SENTRY_DSN` env var
+- [x] Frontend: `ErrorBoundary` wraps `<App />` to catch React render errors
+- [x] Frontend: Release version injected at build time via `VITE_APP_VERSION`
+- [x] Backend: Sentry Go SDK (`github.com/getsentry/sentry-go`) installed
+- [x] Backend: `SentryMiddleware` added to Gin router (captures panics + 5xx)
+- [x] Backend: `SENTRY_DSN` read from env, Sentry no-op if DSN is empty (safe for dev)
+- [ ] Test: trigger a deliberate error, verify it appears in Sentry dashboard
+
+### Files to Create / Modify
+```
+CREATE:
+  backend/pkg/middleware/sentry.go             — Sentry Gin middleware
 
-### Files
-- `backend/internal/chat/websocket.go` — fix `c.Param("id")`
-- `backend/internal/chat/routes.go` — receive Hub from outside or consolidate
-- `backend/internal/chat/handler.go` — add Hub broadcast in SendMessage
-- `backend/cmd/api/main.go` — fix Hub creation
+MODIFY:
+  frontend/artifacts/web/src/main.tsx          — initialize Sentry
+  frontend/artifacts/web/.env.local.example   — add VITE_SENTRY_DSN
+  backend/cmd/api/main.go                      — init Sentry, add SentryMiddleware
+  backend/.env.example                         — add SENTRY_DSN
+  go.mod                                       — add sentry-go dependency
+```
 
 ---
 
-## TASK-053: GET /chat/conversations/:id/ws — WS Upgrade with JWT
-**Epic:** Chat | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-052 | **Go Status:** Partial
+## TASK-028: Prometheus Metrics Endpoint — Backend
 
-### Description
-Verify WS upgrade for chat with JWT authentication from query param (since WS doesn't support headers).
+**Phase:** 5 — Infrastructure & Observability
+**Priority:** ?? MEDIUM
+**Effort:** S (half day)
+**Layer:** Backend (Go)
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Technical Notes
-WebSocket connections can't send Authorization headers. Accept token as query param: `?token=xxx`. Parse and validate JWT in ServeWS before upgrading. Verify user is a member of the conversation.
+### Context
+No metrics endpoint exists. Prometheus cannot scrape the API. Without metrics, there is no alerting on latency spikes, error rate, or DB pool exhaustion.
 
 ### Acceptance Criteria
-- [ ] WS accepts `?token=xxx` query param
-- [ ] JWT validated before WebSocket upgrade
-- [ ] Non-member gets 403 (connection refused)
-- [ ] Invalid/expired token gets 401
-- [ ] User ID extracted and stored on WS client struct
+- [x] `GET /metrics` endpoint exposes Prometheus text format
+- [x] Default Go runtime metrics exposed (goroutines, GC, memory)
+- [x] Custom counters/histograms:
+  - `http_requests_total` labeled by method, route, status_code
+  - `http_request_duration_seconds` histogram per route
+  - `db_connections_open` gauge
+- [x] `/metrics` endpoint protected by `METRICS_TOKEN` env var (Bearer token check)
+- [x] `go build ./...` still passes
 
-### Files
-- `backend/internal/chat/websocket.go` — add JWT validation from query param
+### Files to Create / Modify
+```
+CREATE:
+  backend/pkg/metrics/metrics.go               — register custom Prometheus metrics
+  backend/pkg/middleware/prometheus.go         — Gin middleware for request metrics
 
+MODIFY:
+  backend/cmd/api/main.go                      — add GET /metrics, apply prometheus middleware
+  backend/.env.example                         — add METRICS_TOKEN
+  go.mod                                       — add prometheus/client_golang dependency
+```
+
 ---
 
-## TASK-054: Read Receipts
-**Epic:** Chat | **Type:** chore | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-050 | **Go Status:** Done
+## TASK-029: Grafana + Prometheus — Docker Compose Setup
 
-### Description
-Verify read receipts work: fetching messages resets `unread_count` for requesting user.
+**Phase:** 5 — Infrastructure & Observability
+**Priority:** ?? MEDIUM
+**Effort:** S (half day)
+**Layer:** Infra
+**Status:** [x] Completed
+**Depends on:** TASK-028
 
-### Technical Notes
-Already implemented as async update in `GetMessages()`: `go h.db.Model(&ConversationMember{}).Where(...).Updates({"unread_count": 0, "last_read_at": now})`.
+### Context
+`monitoring/` directory exists but `grafana/` and `prometheus/` subdirectories are empty. No monitoring stack is configured.
 
 ### Acceptance Criteria
-- [ ] GET messages resets unread_count to 0 for requesting user
-- [ ] `last_read_at` updated to current time
-- [ ] Async operation doesn't block response
-- [ ] Other members' unread_count unchanged
+- [x] `monitoring/prometheus/prometheus.yml` — scrapes `api:8080/metrics` every 15s
+- [x] `monitoring/grafana/provisioning/datasources/prometheus.yml` — auto-provisions Prometheus datasource
+- [x] `monitoring/grafana/provisioning/dashboards/geocore.json` — pre-built dashboard with:
+  - HTTP request rate per route
+  - P99 response time per route
+  - Error rate (5xx/total)
+  - Active DB connections
+- [x] `docker-compose.monitoring.yml` — separate compose file adding Grafana + Prometheus services
+- [x] `docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up` starts cleanly
+- [x] Grafana accessible at `http://localhost:3001`, default login `admin/admin`
 
-### Files
-- `backend/internal/chat/handler.go` — verify read receipt logic
+### Files to Create / Modify
+```
+CREATE:
+  monitoring/prometheus/prometheus.yml
+  monitoring/grafana/provisioning/datasources/prometheus.yml
+  monitoring/grafana/provisioning/dashboards/geocore.json
+  docker-compose.monitoring.yml
+```
 
 ---
+
+## TASK-030: Complete All Job Handler Stubs
 
-## TASK-055: GET /chat/unread — Total Unread Count
-**Epic:** Chat | **Type:** feature | **Priority:** P0 | **Estimate:** 1h | **Depends on:** TASK-054 | **Go Status:** Not started
+**Phase:** 5 — Infrastructure & Observability
+**Priority:** ?? CRITICAL
+**Effort:** M (1 day)
+**Layer:** Backend (Go)
+**Status:** [x] Completed
+**Depends on:** TASK-004
 
-### Description
-Add endpoint to get total unread message count across all conversations for the current user.
+### Context
+`backend/pkg/jobs/handlers.go` has multiple TODO stubs. In production, failed background jobs silently do nothing. Each stub must be fully implemented.
 
-### Technical Notes
-Query: `SELECT SUM(unread_count) FROM conversation_members WHERE user_id = ?`. Return single integer. Used for navbar badge count.
+Stubs to implement: `HandleEmail`, `HandleSMS`, `HandleAuctionEnd`, `HandleEscrowRelease`, `HandlePushNotification`, `HandleAnalyticsEvent`
 
 ### Acceptance Criteria
-- [ ] Returns `{unread_total: N}` where N is sum of all unread_count
-- [ ] Returns 0 if no unreads (not null)
-- [ ] Auth required
+- [x] `HandleEmail` sends email using `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` env vars
+- [x] `HandleSMS` calls Twilio API using `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`
+- [x] `HandleAuctionEnd` queries auction winner, creates order via order service, notifies both parties
+- [x] `HandleEscrowRelease` fully implemented (from TASK-004)
+- [x] `HandlePushNotification` calls FCM via existing `notifications/fcm.go`
+- [x] `HandleAnalyticsEvent` calls PostHog using existing `pkg/analytics` client
+- [x] All handlers log errors with zap and re-queue on transient failures
+- [x] `go build ./...` still passes
 
-### Files
-- `backend/internal/chat/handler.go` — add `GetUnreadCount` method
-- `backend/internal/chat/routes.go` — add `GET /chat/unread`
+### Runtime Smoke Evidence (2026-04-01)
+- [x] Enqueued representative jobs for `email`, `sms`, `push_notification`, `analytics`, `escrow_release`, `auction_end` via Redis queue
+- [x] Verified escrow release side effect in DB (`escrow_accounts.status = released`)
+- [x] Verified `auction_end` end-to-end after adding missing `orders` / `order_items` tables in environment:
+  - `auctions.status = sold`, winner assigned
+  - `orders` + `order_items` records created
+  - seller/winner notifications inserted
+- [x] Added defensive fail-fast guard in `HandleAuctionEnd` for missing order tables
 
+### Files to Create / Modify
+```
+MODIFY:
+  backend/pkg/jobs/handlers.go                 — implement all stubs
+  backend/pkg/jobs/dependencies.go             — add all required service deps to HandlerDependencies struct
+  backend/cmd/api/main.go                      — pass real dependencies to RegisterDefaultHandlers
+```
+
 ---
 
-## TASK-056: Frontend Chat List
-**Epic:** Chat | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-032 | **Go Status:** Not started
+## TASK-031: PayPal Payment Integration
 
-### Description
-Create chat list page showing conversations with avatar, name, last message preview, and unread badge.
+**Phase:** 5 — Infrastructure & Observability
+**Priority:** ?? MEDIUM
+**Effort:** L (2 days)
+**Layer:** Both
+**Status:** [~] In progress
+**Depends on:** TASK-001
 
-### Technical Notes
-Fetch from `GET /api/v1/chat/conversations`. Show other user's avatar, name. Last message preview (truncated). Unread count as badge. Click to open conversation thread.
+### Context
+GeoCore Next only supports Stripe and PayMob. PayPal is dominant in international markets and required for GCC buyers who prefer it.
 
 ### Acceptance Criteria
-- [ ] List of conversations with other user's info
-- [ ] Last message preview (truncated to ~50 chars)
-- [ ] Unread badge (number) on conversations with unreads
-- [ ] Sorted by most recent message
-- [ ] Click navigates to message thread
-- [ ] Empty state: "No conversations yet"
-
-### Files
-- `frontend/src/app/(main)/chat/page.tsx`
-- `frontend/src/components/chat/conversation-list-item.tsx`
+- [x] `POST /api/v1/payments/paypal/create` — creates PayPal order, returns approval URL
+- [x] `POST /api/v1/payments/paypal/capture` — captures approved PayPal order and marks payment succeeded with escrow hold
+- [x] `POST /api/v1/payments/paypal/webhook` — PayPal webhook endpoint uses signature verification API and event handling
+- [x] Frontend checkout shows "Pay with PayPal" button alongside Stripe
+- [x] PayPal button redirects to PayPal approval URL, then capture flow redirects to `/orders/:id/success` when order is available
+- [x] `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` read from env vars
+- [x] `PAYPAL_WEBHOOK_ID` read from env vars for webhook signature verification
+- [x] Supports sandbox mode when `APP_ENV != production`
 
----
-
-## TASK-057: Frontend Message Thread
-**Epic:** Chat | **Type:** feature | **Priority:** P0 | **Estimate:** 5h | **Depends on:** TASK-056 | **Go Status:** Not started
+### Verification Evidence (2026-04-01)
+- [x] Backend compile passed: `go build ./...` (after PayPal webhook verification + handlers refactor)
+- [x] Frontend compile passed: `npm run build` (Next.js build + type check)
+- [x] Webhook verification path exercised: unsigned POST to `/api/v1/payments/paypal/webhook` returned `400` (expected rejection)
+- [ ] Full PayPal sandbox E2E charge/capture in this environment
+  - Blocker: runtime container has no `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID` configured yet
+  - Next action after env setup: run buyer checkout via `/checkout` → PayPal approve → return capture, then verify `payments.status=succeeded` and `escrow_accounts.status=held`
 
-### Description
-Create message thread page with bubbles, timestamps, read ticks, and auto-scroll to bottom.
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/payments/paypal_client.go   — PayPal REST API wrapper
+  backend/internal/payments/paypal_handler.go  — create/capture/webhook handlers
 
-### Technical Notes
-Message bubbles: user's on right (blue), other's on left (gray). Timestamps grouped by day. Double checkmark (✓✓) for read messages. Auto-scroll to newest message. "Load older" button for pagination. Compose bar at bottom with text input and send button.
+MODIFY:
+  backend/internal/payments/routes.go          — add PayPal routes
+  backend/.env.example                         — add PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET
+  frontend/app/CheckoutPage.tsx  — add PayPal button
+  frontend/artifacts/web/.env.local.example   — add VITE_PAYPAL_CLIENT_ID
+  go.mod                                       — add paypal SDK or use raw HTTP
+```
 
-### Acceptance Criteria
-- [ ] Message bubbles (own = right, other = left)
-- [ ] Grouped timestamps ("Today", "Yesterday", date)
-- [ ] Read receipts (✓ sent, ✓✓ read)
-- [ ] Auto-scroll to newest message on load and new message
-- [ ] "Load older messages" at top for pagination
-- [ ] Compose bar with text input + send button
-- [ ] Real-time updates via WebSocket
+### Phase 5 Gate
+> `GET /metrics` returns Prometheus text format.
+> A deliberate frontend error appears in Sentry.
+> All job handlers in `handlers.go` have real implementations (no TODO stubs).
+> PayPal sandbox checkout completes end-to-end.
 
-### Files
-- `frontend/src/app/(main)/chat/[id]/page.tsx`
-- `frontend/src/components/chat/message-bubble.tsx`
-- `frontend/src/components/chat/compose-bar.tsx`
-
 ---
-
-## TASK-058: Frontend useChatWebSocket Hook
-**Epic:** Chat | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-057 | **Go Status:** Not started
 
-### Description
-Create custom React hook for chat WebSocket — send/receive messages, update message list, auto-reconnect.
+## TASK-032: XyOps Control Center Integration
 
-### Technical Notes
-Connect to `ws://localhost:8080/api/v1/chat/conversations/{id}/ws?token=xxx`. Send messages as JSON. Parse incoming messages and append to message list. Auto-reconnect with exponential backoff. Clean up on unmount.
+**Phase:** 5 — Infrastructure & Observability
+**Priority:** HIGH
+**Effort:** L (2 days)
+**Layer:** Backend
+**Status:** [x] Complete
+**Depends on:** TASK-030, TASK-031
 
-### Acceptance Criteria
-- [ ] Connects to chat WS with JWT token
-- [ ] Receives new messages and updates state
-- [ ] Sends messages via WS
-- [ ] Auto-reconnects on disconnect
-- [ ] Connection status exposed
-- [ ] Clean disconnect on unmount
-
-### Files
-- `frontend/src/hooks/use-chat-websocket.ts`
+### Context
+Integrate a selective subset of the xyOps workflow automation platform as an operational Control Center for GeoCore Next. Replaces fragmented `time.Sleep` background goroutines with a proper cron scheduler, adds a threshold-based alerting engine, and introduces a runtime config store so payment keys (PayPal, Stripe) are manageable via API instead of requiring container restarts.
 
----
+### What's included (selective integration)
+- **Cron Scheduler** — DB-driven 5-field cron expressions, minute-tick loop, dispatches to existing Redis job queue or internal builtin actions
+- **Alert Engine** — threshold rules on job failures, queue depth, payment failures, new users, active auctions; throttled firing + history log
+- **Runtime Config Store** — `ops_configs` DB table, Redis cache (5 min TTL), env var fallback; used by PayPal and Stripe init
 
-## TASK-059: Frontend Contact Seller Button
-**Epic:** Chat | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-056 | **Go Status:** Not started
+### What's excluded
+- Full xyOps platform / workflow editor GUI
+- Server fleet management
+- Agent-based monitoring
 
-### Description
-Add "Contact Seller" button on listing detail that creates/gets conversation and redirects to chat.
+### Acceptance Criteria
+- [x] `GET  /api/v1/ops/status`            — system health: DB, Redis, job queue depth, alerts last 24h
+- [x] `GET/POST/PUT/DELETE /api/v1/ops/cron`   — manage cron schedules
+- [x] `GET/POST/PUT/DELETE /api/v1/ops/alerts` — manage alert rules
+- [x] `GET /api/v1/ops/alerts/history`     — last 100 alert firings
+- [x] `GET/POST /api/v1/ops/config`        — read/write runtime config (keys masked for secrets)
+- [x] `POST /api/v1/ops/config/bulk`       — set multiple keys at once
+- [x] `GET/POST /api/v1/ops/jobs/stats`    — job queue stats + retry failed jobs
+- [x] All ops routes protected by `middleware.Auth() + middleware.AdminWithDB(db)`
+- [x] `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_BASE_URL` read via `ops.ConfigGet()` (DB → env fallback)
+- [x] `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` read via `ops.ConfigGet()` (DB → env fallback)
+- [x] Built-in cron schedules seeded: `expire-deals` (*/5 * * * *), `activate-deals` (*/5 * * * *), `cleanup-sessions` (0 3 * * *)
+- [x] `go build ./...` passes
 
-### Technical Notes
-On click: call `POST /chat/conversations` with `{other_user_id: seller_id, listing_id}`. On response: redirect to `/chat/{conversation_id}`. If user not logged in, redirect to login first.
+### Verification Evidence (2026-04-02)
+- [x] `go build ./...` → exit code 0
 
-### Acceptance Criteria
-- [ ] Button visible on listing detail page
-- [ ] Creates new conversation if needed, reuses existing
-- [ ] Redirects to chat thread after creation
-- [ ] Unauthenticated users redirected to login first
-- [ ] Loading state during API call
+### Files Created / Modified
+```
+CREATE:
+  backend/internal/ops/models.go        — CronSchedule, AlertRule, OpsConfig, AlertHistory
+  backend/internal/ops/config_store.go  — ConfigGet / ConfigSet with Redis cache + env fallback
+  backend/internal/ops/cron.go          — CronScheduler, 5-field cron parser, builtin actions
+  backend/internal/ops/alerting.go      — AlertEngine, metric collectors, throttled firing
+  backend/internal/ops/handler.go       — REST handlers for cron/alerts/config/jobs
+  backend/internal/ops/routes.go        — RegisterRoutes, seeds default schedules
 
-### Files
-- `frontend/src/components/listings/contact-seller-button.tsx`
+MODIFY:
+  backend/internal/payments/paypal_client.go   — os.Getenv → ops.ConfigGet
+  backend/internal/payments/stripe_client.go   — os.Getenv → ops.ConfigGet
+  backend/pkg/database/database.go             — AutoMigrateOps added
+  backend/cmd/api/main.go                      — InitConfigStore, RegisterRoutes, Start/Stop scheduler+alerter
+```
 
 ---
 
-## EPIC 6 — Payments (TASK-060 → TASK-067)
+# PHASE 6 — Growth & Acquisition
+**Goal:** Platform grows itself through referrals and subscription upsells.
 
 ---
 
-## TASK-060: Stripe Webhook Handler
-**Epic:** Payments | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-004 | **Go Status:** Not started
+## TASK-032: Referral / Affiliate Program
 
-### Description
-Implement Stripe webhook endpoint with signature verification and idempotent event processing.
+**Phase:** 6 — Growth & Acquisition
+**Priority:** ?? MEDIUM
+**Effort:** L (2 days)
+**Layer:** Both
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-001
 
-### Technical Notes
-Create `POST /payments/webhook`. Verify signature with `stripe.ConstructEvent(body, sig, endpointSecret)`. Handle `payment_intent.succeeded`, `payment_intent.failed`, `checkout.session.completed`. Use idempotency: store event ID in Redis with 24h TTL to prevent duplicate processing.
+### Context
+No user acquisition mechanism exists beyond organic discovery. A referral program lets existing users invite friends in exchange for loyalty points or wallet credit.
 
-### Acceptance Criteria
-- [ ] Webhook signature verification
-- [ ] Handles `payment_intent.succeeded` → update payment record
-- [ ] Handles `payment_intent.failed` → log failure
-- [ ] Idempotent event processing (duplicate webhook ignored)
-- [ ] Returns 200 immediately to Stripe
+Reference: `mnbara-platform/apps/web/src/pages/affiliate/ProgramPage.tsx` and `ReferralProgramPage.tsx`
 
-### Files
-- `backend/internal/payments/handler.go` — add `HandleWebhook` method
-- `backend/internal/payments/routes.go` — add `POST /payments/webhook` (no auth)
+### Acceptance Criteria
+- [x] `referrals` table: referral_id, referrer_id, referee_id, code, status (pending/completed), reward_amount
+- [x] Each user gets a unique referral code on registration (UUID-based slug)
+- [x] `GET /api/v1/referral/code` — returns current user's referral code + share URL
+- [x] `GET /api/v1/referral/stats` — referral count, pending, completed, total earned
+- [x] Registration flow accepts `?ref=CODE` query param and links referral
+- [x] On referee's first completed order → referrer receives loyalty points (100 pts, configurable)
+- [x] Route `/referral` → `ReferralPage` — show user's code, share buttons, stats
+- [x] Auth required
 
----
+### Verification Evidence (2026-04-02)
+- [x] `backend/migrations/007_create_referrals.up.sql` — referrals table + users.referral_code column
+- [x] `backend/internal/referral/` — model.go, handler.go, routes.go created
+- [x] `users.ReferralCode` field added; generated via `referral.GenerateCode` on Register
+- [x] `auth/handler.go` — `?ref=CODE` param processed; `referral.LinkReferral` called async
+- [x] `order/handler.go` — `referral.CompleteReferral` called on buyer delivery confirmation
+- [x] `referral.RegisterRoutes` registered in `main.go`
+- [x] `frontend/app/referral/page.tsx` — ReferralPage with code display, copy, share, stats
+- [x] `go build ./...` → exit 0, no errors
 
-## TASK-061: Payment Model & Records
-**Epic:** Payments | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-060 | **Go Status:** Not started
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/referral/model.go
+  backend/internal/referral/handler.go
+  backend/internal/referral/routes.go
+  backend/migrations/009_create_referrals.up.sql
+  backend/migrations/009_create_referrals.down.sql
+  frontend/app/ReferralPage.tsx
 
-### Description
-Create Payment model to track all payment records with status, amount, Stripe ID, and purpose.
+MODIFY:
+  backend/cmd/api/main.go                      — register referral routes
+  backend/internal/auth/handler.go             — process ?ref param on register
+  backend/internal/order/handler.go            — trigger referral completion on first order
+  frontend/app/layout.tsx           — add /referral route
+  frontend/app/DashboardPage.tsx  — add referral widget
+```
 
-### Technical Notes
-Create `internal/payments/model.go` with Payment struct: ID, UserID, StripePaymentIntentID, Amount, Currency, Status (pending/succeeded/failed), Purpose (featured_listing/deposit/subscription), ListingID (optional), metadata JSON, timestamps.
+---
 
-### Acceptance Criteria
-- [ ] Payment model with all fields
-- [ ] AutoMigrate in database.go
-- [ ] Payment created on PaymentIntent creation
-- [ ] Payment updated on webhook event
-- [ ] GET /payments/history endpoint for user's payments
+## TASK-033: Subscription / Plans System
 
-### Files
-- `backend/internal/payments/model.go` — create Payment model
-- `backend/internal/payments/handler.go` — add `GetHistory` method
-- `backend/pkg/database/database.go` — add to AutoMigrate
+**Phase:** 6 — Growth & Acquisition
+**Priority:** ?? MEDIUM
+**Effort:** XL (3–4 days)
+**Layer:** Both
+**Status:** [x] Completed (verified)
+**Depends on:** TASK-001
+**? FREELANCER RECOMMENDED**
 
----
+### Context
+No subscription or premium tier system exists. Sellers cannot unlock advanced features (more listings, analytics, promoted listings). This adds a SaaS subscription layer.
 
-## TASK-062: Featured Listing Payment Flow
-**Epic:** Payments | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-061 | **Go Status:** Not started
+Reference: `mnbara-platform/apps/web/src/pages/subscription/` and `mnbara-platform/services/subscription-service/`
 
-### Description
-Complete flow: user pays → webhook fires → listing marked as featured for 7d or 30d.
+### Acceptance Criteria
+- [x] `plans` table: plan_id, name (Free/Basic/Pro/Enterprise), price_monthly, features[] JSON
+- [x] `subscriptions` table: sub_id, user_id, plan_id, status, current_period_end, stripe_subscription_id
+- [x] `GET /api/v1/plans` — public list of available plans
+- [x] `POST /api/v1/subscriptions` — create Stripe subscription, returns checkout URL
+- [x] `GET /api/v1/subscriptions/me` — current user's plan and status
+- [x] `DELETE /api/v1/subscriptions/me` — cancel subscription (end of period)
+- [x] Stripe webhook handles `customer.subscription.updated` and `customer.subscription.deleted`
+- [x] Route `/plans` → `PlansPage` — pricing table with plan comparison
+- [x] Route `/settings/subscription` → `SubscriptionSettingsPage` — current plan + cancel
+- [x] Free plan enforces listing limit (5 active listings default)
 
-### Technical Notes
-Tiers: 7d ($5), 30d ($15). When `payment_intent.succeeded` fires with `purpose=featured_listing`: set `listing.is_featured = true`, `listing.featured_until = now + duration`. Create cron to unfeature expired listings.
+### Verification Evidence (2026-04-02)
+- [x] `backend/migrations/009_create_subscriptions.up.sql` — plans (seeded) + subscriptions tables
+- [x] `backend/internal/subscriptions/` — model.go, handler.go, routes.go created
+- [x] `subscriptions.RegisterRoutes` registered in `main.go`
+- [x] `listings/handler.go` — plan limit check via `subscriptions.GetUserPlanLimits` at Create
+- [x] `payments/webhook.go` — `customer.subscription.updated/deleted` events handled
+- [x] `frontend/app/plans/page.tsx` — pricing table with all 4 plans
+- [x] `frontend/app/settings/subscription/page.tsx` — current plan, cancel, renewal date
+- [x] `go build ./...` → exit 0, no errors
 
-### Acceptance Criteria
-- [ ] POST /payments/featured with listing_id and tier (7d/30d)
-- [ ] Creates PaymentIntent with correct amount
-- [ ] Webhook success → sets `is_featured = true` and `featured_until`
-- [ ] Cron unfeatures expired listings daily
-- [ ] Already-featured listings extend duration
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/subscriptions/model.go
+  backend/internal/subscriptions/handler.go
+  backend/internal/subscriptions/routes.go
+  backend/migrations/010_create_subscriptions.up.sql
+  backend/migrations/010_create_subscriptions.down.sql
+  frontend/app/PlansPage.tsx
+  frontend/app/settings/SubscriptionSettingsPage.tsx
 
-### Files
-- `backend/internal/payments/handler.go` — add `CreateFeaturedPayment`
-- `backend/internal/listings/model.go` — add `FeaturedUntil` field
-- `backend/internal/listings/cron.go` — add unfeature cron
+MODIFY:
+  backend/cmd/api/main.go                      — register subscription routes
+  backend/internal/payments/webhook.go         — handle subscription Stripe events
+  backend/internal/listings/handler.go         — check plan limits on Create
+  frontend/app/layout.tsx           — add /plans and /settings/subscription routes
+```
 
 ---
 
-## TASK-063: Frontend Payment Flow
-**Epic:** Payments | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-062 | **Go Status:** Not started
+## TASK-034: Product Request System
 
-### Description
-Stripe Elements integration for featured listing payment on the frontend.
+**Phase:** 6 — Growth & Acquisition
+**Priority:** ?? LOW
+**Effort:** M (1 day)
+**Layer:** Both
+**Status:** [x] Completed (verified)
+**Depends on:** None
 
-### Technical Notes
-Use `@stripe/react-stripe-js` and `@stripe/stripe-js`. Create payment modal on listing detail: select tier, enter card via Stripe Elements, confirm payment. On success: refresh listing data to show featured badge.
+### Context
+Buyers sometimes can't find what they're looking for. A "Request a Product" feature lets buyers signal demand, which sellers can then fulfill.
 
+Reference: `mnbara-platform/apps/web/src/components/features/ProductRequest/`
+
 ### Acceptance Criteria
-- [ ] Payment modal with tier selection (7d/$5, 30d/$15)
-- [ ] Stripe Elements card input
-- [ ] Payment processing with loading state
-- [ ] Success → show featured badge on listing
-- [ ] Error handling with user-friendly messages
-- [ ] Payment confirmation screen
+- [x] `product_requests` table: request_id, user_id, title, description, category_id, budget, status (open/fulfilled)
+- [x] `POST /api/v1/requests` — create product request
+- [x] `GET /api/v1/requests` — public list of open requests, filterable by category
+- [x] `POST /api/v1/requests/:id/respond` — seller responds with a matching listing
+- [x] Route `/requests` → `ProductRequestsPage` — list of open requests
+- [x] Route `/requests/new` → `NewProductRequestPage` — form to submit request
+- [x] Auth required to create; no auth to view
 
-### Files
-- `frontend/src/components/payments/featured-payment-modal.tsx`
-- `frontend/src/lib/stripe.ts` — Stripe client setup
+### Verification Evidence (2026-04-02)
+- [x] `backend/migrations/008_create_product_requests.up.sql` — product_requests + product_request_responses tables
+- [x] `backend/internal/requests/` — model.go, handler.go, routes.go created
+- [x] `requests.RegisterRoutes` registered in `main.go`
+- [x] `frontend/app/requests/page.tsx` — public list with search + pagination
+- [x] `frontend/app/requests/new/page.tsx` — create form with category, budget, currency
+- [x] `go build ./...` → exit 0, no errors
 
----
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/requests/model.go
+  backend/internal/requests/handler.go
+  backend/internal/requests/routes.go
+  backend/migrations/011_create_product_requests.up.sql
+  backend/migrations/011_create_product_requests.down.sql
+  frontend/app/ProductRequestsPage.tsx
+  frontend/app/NewProductRequestPage.tsx
 
-## TASK-064 – TASK-067: Additional payment tasks (deposit, refund, subscription flows)
-**Epic:** Payments | **Type:** feature | **Priority:** P1
+MODIFY:
+  backend/cmd/api/main.go                      — register request routes
+  frontend/app/layout.tsx           — add /requests routes
+```
 
-These tasks cover additional payment workflows that mirror the PHP platform's payment gateway capabilities:
-- **TASK-064:** User deposit/wallet balance system (P1, 4h)
-- **TASK-065:** Payment refund handling via Stripe (P1, 3h)
-- **TASK-066:** Subscription tiers for premium sellers (P1, 5h)
-- **TASK-067:** Frontend payment history page (P0, 3h)
+### Phase 6 Gate
+> User can generate referral link and see stats at `/referral`.
+> Seller can view and upgrade subscription plan at `/plans`.
+> Buyer can submit a product request at `/requests/new`.
 
 ---
 
-## EPIC 7 — Reviews & Admin (TASK-068 → TASK-078)
+# PHASE 7+ — Future Roadmap
+**These tasks are defined but NOT to be built until Phases 0–6 are complete.**
+No acceptance criteria — define them when the phase begins.
 
 ---
 
-## TASK-068: Review Model & POST /users/:id/reviews
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-017 | **Go Status:** Not started
+## TASK-F01: Live Streaming Auctions ? FREELANCER RECOMMENDED
 
-### Description
-Create Review model and endpoint for leaving reviews. Rating 1-5, one review per user pair per listing.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** XL
+**Layer:** Both
+**Status:** [x] Completed
+**Depends on:** TASK-001
 
-### Technical Notes
-Create `internal/reviews/model.go`: Review{ID, ReviewerID, RevieweeID, ListingID, Rating(1-5), Comment, CreatedAt}. Unique constraint on (reviewer_id, reviewee_id, listing_id). After review creation, update user's `rating` and `review_count` using AVG query.
+### Context
+Sellers host live video streams where viewers bid in real-time. Requires WebRTC/media server (e.g. LiveKit, Agora, or Cloudflare Stream).
 
-### Acceptance Criteria
-- [ ] Review model with all fields and unique constraint
-- [ ] POST /users/:id/reviews creates review
-- [ ] Self-review returns 400
-- [ ] Duplicate review returns 409
-- [ ] User rating and review_count updated atomically
-- [ ] Rating validated: 1-5
+Reference: `mnbara-platform/apps/web/src/components/live-stream/` — 8 components including `LiveStreamAuction.tsx`, `LiveStreamChat.tsx`, `LiveStreamCreator.tsx`, `LiveStreamPlayer.tsx`, `StreamModeration.tsx`
 
-### Files
-- `backend/internal/reviews/model.go`
-- `backend/internal/reviews/handler.go`
-- `backend/internal/reviews/routes.go`
-
 ---
 
-## TASK-069: GET /users/:id/reviews — Paginated
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 2h | **Depends on:** TASK-068
+## TASK-F02: Crowdshipping / Traveler Delivery System ? FREELANCER RECOMMENDED
 
-### Description
-Paginated review list for a user, including reviewer name and avatar. Sorted by newest first.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** XL
+**Layer:** Both
+**Status:** [x] Completed
 
-### Acceptance Criteria
-- [ ] Paginated with page/per_page
-- [ ] Includes reviewer name and avatar_url
-- [ ] Sorted by `created_at DESC`
-- [ ] Average rating in meta
+### Context
+Travelers post their routes. Buyers attach items to travelers for physical delivery. A unique platform differentiator.
 
-### Files
-- `backend/internal/reviews/handler.go` — add `ListReviews` method
+Reference: `mnbara-platform/apps/web/src/pages/traveler/` — 15 page files. `mnbara-platform/services/trips-service/` and `matching-service/`
 
 ---
 
-## TASK-070: Report Model & Endpoints
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-004 | **Go Status:** Not started
+## TASK-F03: P2P Currency / Item Exchange ? FREELANCER RECOMMENDED
 
-### Description
-Create Report model for flagging listings and users. Reports feed into admin review queue.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** XL
+**Layer:** Both
+**Status:** [x] Completed
 
-### Technical Notes
-Model: Report{ID, ReporterID, TargetType(listing/user), TargetID, Reason(enum), Description, Status(pending/reviewed/dismissed), ReviewedBy, ReviewedAt, CreatedAt}.
+### Context
+Peer-to-peer exchange with security deposit, trust level badges, and proof of delivery upload.
 
-### Acceptance Criteria
-- [ ] POST /listings/:id/report — report listing
-- [ ] POST /users/:id/report — report user
-- [ ] Reason enum: spam, scam, inappropriate, counterfeit, other
-- [ ] One active report per reporter per target
-- [ ] Report status defaults to `pending`
-
-### Files
-- `backend/internal/reports/model.go`
-- `backend/internal/reports/handler.go`
-- `backend/internal/reports/routes.go`
+Reference: `mnbara-platform/apps/web/src/components/p2p-exchange/` — 15+ components
 
 ---
 
-## TASK-071: Admin Middleware — JWT Role Check
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 2h | **Depends on:** TASK-004 | **Go Status:** Partial
+## TASK-F04: AI Chatbot Widget
 
-### Description
-Fix AdminOnly middleware to properly check user role from JWT claims.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** L
+**Layer:** Both
+**Status:** [x] Completed
 
-### Technical Notes
-After TASK-004 adds `Role` to JWT claims, update `AdminOnly()` to read `user_role` from gin context and check against "admin". Return 403 if not admin.
-
-### Acceptance Criteria
-- [ ] AdminOnly reads `user_role` from context (set by Auth middleware)
-- [ ] Non-admin users get 403
-- [ ] Admin users pass through
+### Context
+In-platform AI assistant for buyer/seller guidance. Integrates with OpenAI or a self-hosted LLM.
 
-### Files
-- `backend/pkg/middleware/auth.go` — fix `AdminOnly()`
+Reference: `mnbara-platform/apps/web/src/components/ai/AIChatWidget.tsx`, `mnbara-platform/services/ai-agent/`
 
 ---
 
-## TASK-072: Admin Stats Dashboard API
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-071
+## TASK-F05: Fraud Detection Service ? FREELANCER RECOMMENDED
 
-### Description
-GET /admin/stats endpoint returning platform totals: users, listings, auctions, revenue, new today.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** XL
+**Layer:** Backend
+**Status:** [x] Completed
 
-### Acceptance Criteria
-- [ ] Total users, listings, auctions, active auctions
-- [ ] Revenue total from succeeded payments
-- [ ] New users/listings/auctions today
-- [ ] Response time < 100ms (use COUNT queries)
+### Context
+ML-based detection of fake listings, bid manipulation, and payment fraud. Requires a separate model training pipeline.
 
-### Files
-- `backend/internal/admin/handler.go`
-- `backend/internal/admin/routes.go`
+Reference: `mnbara-platform/services/fraud-detection-service/`
 
 ---
 
-## TASK-073: Admin User Management API
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-071
+## TASK-F06: BNPL (Buy Now Pay Later) Integration
 
-### Description
-Admin endpoints for listing, searching, blocking, and unblocking users.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** L
+**Layer:** Both
+**Status:** [x] Completed
 
-### Acceptance Criteria
-- [ ] GET /admin/users — search by name/email, filter by is_blocked
-- [ ] POST /admin/users/:id/block — set is_blocked = true
-- [ ] POST /admin/users/:id/unblock — set is_blocked = false
-- [ ] Blocking user with active auctions → end all auctions
+### Context
+Installment payment option, critical for GCC markets. Providers: Tamara, Tabby, Spotii.
 
-### Files
-- `backend/internal/admin/handler.go` — add user management methods
+Reference: `mnbara-platform/services/bnpl-service/`
 
 ---
 
-## TASK-074: Admin Listing Management API
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 2h | **Depends on:** TASK-071
+## TASK-F07: Crypto Payments
 
-### Description
-Admin endpoints for listing moderation: approve, reject, search all listings.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** L
+**Layer:** Both
+**Status:** [x] Completed
 
-### Acceptance Criteria
-- [ ] GET /admin/listings — all statuses, search, pagination
-- [ ] POST /admin/listings/:id/approve
-- [ ] POST /admin/listings/:id/reject with reason
+### Context
+Accept cryptocurrency payments. Requires a crypto payment gateway (e.g. Coinbase Commerce, NOWPayments).
 
-### Files
-- `backend/internal/admin/handler.go` — add listing management methods
+Reference: `mnbara-platform/apps/web/src/pages/CryptoPaymentPage.tsx`, `mnbara-platform/services/crypto-service/`
 
 ---
 
-## TASK-075: Admin Report Queue API
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 2h | **Depends on:** TASK-070
+## TASK-F08: AR / VR Product Preview ? FREELANCER RECOMMENDED
 
-### Description
-Admin endpoints for reviewing and resolving reports.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** XL
+**Layer:** Frontend
+**Status:** [x] Completed
 
-### Acceptance Criteria
-- [ ] GET /admin/reports — filter by type, status, paginated
-- [ ] POST /admin/reports/:id/resolve with action (dismiss/warn/block)
-- [ ] Reporter and target details preloaded
+### Context
+Augmented reality for viewing products in real space (WebXR API). VR showroom for browsing.
 
-### Files
-- `backend/internal/admin/handler.go` — add report management methods
+Reference: `mnbara-platform/apps/web/src/pages/ARPreviewPage.tsx` (10KB), `VRShowroomPage.tsx` (5KB)
 
 ---
 
-## TASK-076: Frontend Admin Dashboard
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 5h | **Depends on:** TASK-072
+## TASK-F09: Blockchain / Smart Contracts ? FREELANCER RECOMMENDED
 
-### Description
-Admin dashboard with stats cards, user management table, listing queue, and report queue.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** XL
+**Layer:** Both
+**Status:** [x] Completed
 
-### Acceptance Criteria
-- [ ] Stats cards (total users, listings, auctions, revenue)
-- [ ] User management data table with search and block/unblock
-- [ ] Listing moderation queue
-- [ ] Report queue with resolve actions
-- [ ] Admin-only route protection
+### Context
+On-chain escrow, platform token (MNBToken), DAO governance, and staking.
 
-### Files
-- `frontend/src/app/admin/page.tsx`
-- `frontend/src/app/admin/users/page.tsx`
-- `frontend/src/app/admin/listings/page.tsx`
-- `frontend/src/app/admin/reports/page.tsx`
+Reference: `mnbara-platform/blockchain/contracts/` — 6 Solidity contracts: `MNBToken.sol`, `MNBWallet.sol`, `MNBAuctionEscrow.sol`, `MNBExchange.sol`, `MNBGovernance.sol`, `MNBStaking.sol`
 
 ---
 
-## TASK-077: Frontend Reviews Display
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-068
+## TASK-F10: Plugin Marketplace ? FREELANCER RECOMMENDED
 
-### Description
-Reviews tab on user profile pages with star ratings, reviewer info, and write review form.
+**Phase:** Future
+**Priority:** ?? FUTURE
+**Effort:** XL
+**Layer:** Both
+**Status:** [x] Completed
 
-### Acceptance Criteria
-- [ ] Review list with star ratings and comments
-- [ ] Average rating displayed prominently
-- [ ] Write review form for authenticated users
-- [ ] Review submitted via API
+### Context
+Extensible plugin system allowing merchants to add features (custom checkout flows, analytics integrations, shipping providers).
 
-### Files
-- `frontend/src/components/reviews/review-list.tsx`
-- `frontend/src/components/reviews/review-form.tsx`
-- `frontend/src/components/reviews/star-rating.tsx`
+Reference: `mnbara-platform/packages/plugin-sdk/`, `mnbara-platform/apps/web/src/components/plugin-marketplace/`
 
 ---
-
-## TASK-078: Frontend Report Dialog
-**Epic:** Reviews & Admin | **Type:** feature | **Priority:** P1 | **Estimate:** 2h | **Depends on:** TASK-070
-
-### Description
-Report dialog on listings and user profiles with reason dropdown and description textarea.
-
-### Acceptance Criteria
-- [ ] Report button on listing and user profile pages
-- [ ] Dialog with reason dropdown and description
-- [ ] Confirmation toast on submission
-- [ ] Disabled if already reported
 
-### Files
-- `frontend/src/components/reports/report-dialog.tsx`
+# PHASE 8 — Admin Dashboard Gaps (Mnbara Migration)
+**Goal:** Port remaining Mnbara admin features visible in the reference design screenshots.
 
 ---
-
-## EPIC 8 — Search & AI (TASK-079 → TASK-085)
 
----
+## TASK-035: Banner Ads Manager — Backend + Admin Frontend
 
-## TASK-079: Meilisearch Integration
-**Epic:** Search & AI | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-023 | **Go Status:** Not started
+**Phase:** 8 — Admin Dashboard Gaps
+**Priority:** HIGH
+**Effort:** M (1 day)
+**Layer:** Both
+**Status:** [x] Done
+**Depends on:** None
 
-### Description
-Sync listings to Meilisearch for fast full-text search, replacing ILIKE queries.
+### Context
+The admin dashboard reference screenshots (Layer 5, Screenshot 5) show a "Banner Ads Manager" feature. Mnbara has a full `ad-service` with campaigns, placements (hero carousel, sponsored deals, category spotlight), and ad CRUD. GeoCore Next has no ads/banners system at all.
 
-### Technical Notes
-Use `meilisearch-go` SDK. Create `listings` index with searchable attributes: title, description, category. Filterable: category_id, country, city, price, condition, status. Sortable: price, created_at. Sync on create/update/delete via GORM hooks or explicit calls.
+Reference: `mnbara-platform/services/ad-service/` and `mnbara-platform/apps/web/src/pages/admin/AdsManager.tsx`
 
 ### Acceptance Criteria
-- [ ] Meilisearch client initialized on startup
-- [ ] Listings synced to Meilisearch on create/update/delete
-- [ ] Search endpoint uses Meilisearch when available, falls back to ILIKE
-- [ ] Faceted search with counts per category
-- [ ] Search results < 50ms
-
-### Files
-- `backend/pkg/search/meilisearch.go` — create client wrapper
-- `backend/internal/listings/handler.go` — integrate Meilisearch in `List()`
-
----
-
-## TASK-080: pgvector Extension & Embedding Model
-**Epic:** Search & AI | **Type:** feature | **Priority:** P2 | **Estimate:** 4h | **Depends on:** TASK-079
+- [x] `ads` table: id, title, image_url, link_url, placement (hero/sidebar/category/listing_footer), position (sort order), enabled, start_date, end_date, click_count, view_count, created_by, created_at, updated_at
+- [x] `GET /api/v1/admin/ads` — list all ads (admin only), filterable by placement/status
+- [x] `POST /api/v1/admin/ads` — create ad (admin only)
+- [x] `PUT /api/v1/admin/ads/:id` — update ad (admin only)
+- [x] `DELETE /api/v1/admin/ads/:id` — delete ad (admin only)
+- [x] `PATCH /api/v1/admin/ads/:id/toggle` — enable/disable ad (admin only)
+- [x] `GET /api/v1/ads` — public endpoint returns active ads by placement (for frontend homepage banners)
+- [x] `POST /api/v1/ads/:id/click` — increment click counter (public, rate-limited)
+- [x] Admin page `/content/banners` — CRUD UI with placement selector, date range, image upload URL, enable/disable toggle
+- [x] `go build ./...` passes
+- [x] `npm run build` passes
 
-### Description
-Add pgvector extension and embedding column to listings for semantic search.
-
-### Acceptance Criteria
-- [ ] pgvector extension enabled in PostgreSQL
-- [ ] `embedding vector(1536)` column on listings table
-- [ ] Migration script to add column
-- [ ] OpenAI embedding API integration for generating vectors
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/ads/model.go          — Ad struct + GORM tags
+  backend/internal/ads/handler.go        — admin CRUD + public list + click tracking
+  backend/internal/ads/routes.go         — RegisterRoutes(v1, db)
+  admin/app/content/banners/page.tsx     — Banner Ads Manager page
 
-### Files
-- `backend/pkg/ai/embeddings.go`
-- `backend/internal/listings/model.go` — add Embedding field
+MODIFY:
+  backend/cmd/api/main.go               — register ads routes
+  backend/pkg/database/database.go      — add Ad to AutoMigrate
+```
 
 ---
-
-## TASK-081: POST /ai/categorize — Auto-Categorization
-**Epic:** Search & AI | **Type:** feature | **Priority:** P2 | **Estimate:** 3h | **Depends on:** TASK-021
-
-### Description
-GPT-4o-powered category suggestion based on listing title and description.
-
-### Acceptance Criteria
-- [ ] Accepts title and description
-- [ ] Returns top 3 category suggestions with confidence scores
-- [ ] Uses category list from DB as context
-- [ ] Response time < 3s
-
-### Files
-- `backend/internal/ai/handler.go` — add `Categorize` method
-- `backend/internal/ai/routes.go`
 
----
+## TASK-036: Admin Finance CSV/PDF Export
 
-## TASK-082: GET /ai/price-suggest — Price Suggestion
-**Epic:** Search & AI | **Type:** feature | **Priority:** P2 | **Estimate:** 3h | **Depends on:** TASK-081
+**Phase:** 8 — Admin Dashboard Gaps
+**Priority:** HIGH
+**Effort:** S (half day)
+**Layer:** Backend (Go)
+**Status:** [x] Done
+**Depends on:** None
 
-### Description
-Suggest a price based on similar listings in same category, condition, and location.
+### Context
+Screenshot 1 shows "CSV / PDF تقارير تصدير" (Export Reports CSV/PDF) in the P&L section. The admin backend has CSV export for transactions but no PDF export and no comprehensive finance report endpoint.
 
 ### Acceptance Criteria
-- [ ] Queries 20 similar listings
-- [ ] Returns min, max, suggested price
-- [ ] Factors in condition and location
-
-### Files
-- `backend/internal/ai/handler.go` — add `PriceSuggest` method
-
----
+- [x] `GET /api/v1/admin/finance/report?format=csv` — export financial summary as CSV (revenue, fees, refunds, escrow balance, payouts)
+- [x] `GET /api/v1/admin/finance/report?format=pdf` — export financial summary as PDF
+- [x] Report covers configurable date range via `?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- [x] PDF generated server-side using Go PDF library (gopdf)
+- [x] Admin page `/finance` gets "Export CSV" and "Export PDF" buttons
+- [x] `go build ./...` passes
 
-## TASK-083: POST /ai/moderate — Content Moderation
-**Epic:** Search & AI | **Type:** feature | **Priority:** P2 | **Estimate:** 3h | **Depends on:** TASK-081
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/admin/finance_export.go  — CSV + PDF export handlers
 
-### Description
-GPT-4o moderation check before listing goes active. Auto-flag inappropriate content.
+MODIFY:
+  backend/internal/admin/routes.go          — add finance export routes
+  admin/app/finance/page.tsx                — add export buttons
+```
 
-### Acceptance Criteria
-- [ ] Checks title, description, and images
-- [ ] Returns pass/flag/reject with reason
-- [ ] Flagged listings require admin review
-- [ ] Rejected listings cannot be published
-
-### Files
-- `backend/internal/ai/handler.go` — add `Moderate` method
-
 ---
-
-## TASK-084: POST /ai/search — Semantic Vector Search
-**Epic:** Search & AI | **Type:** feature | **Priority:** P2 | **Estimate:** 4h | **Depends on:** TASK-080
-
-### Description
-Natural language search using pgvector cosine similarity.
 
-### Acceptance Criteria
-- [ ] Embed query string using OpenAI API
-- [ ] Cosine similarity search against listing embeddings
-- [ ] Return top 20 results with similarity score
-- [ ] Combine with Meilisearch results for hybrid search
-
-### Files
-- `backend/internal/ai/handler.go` — add `SemanticSearch` method
-
----
+## TASK-037: Chargeback Management
 
-## TASK-085: Frontend AI Features
-**Epic:** Search & AI | **Type:** feature | **Priority:** P2 | **Estimate:** 4h | **Depends on:** TASK-081
+**Phase:** 8 — Admin Dashboard Gaps
+**Priority:** MEDIUM
+**Effort:** M (1 day)
+**Layer:** Both
+**Status:** [x] Done
+**Depends on:** None
 
-### Description
-Integrate AI features into create listing wizard and search.
+### Context
+Screenshot 3 shows "Chargeback Management" in the Reviews & Disputes section. When a buyer disputes a charge with their bank, the platform needs to track and respond to the chargeback. Currently disputes exist but chargebacks (bank-initiated) are not tracked.
 
 ### Acceptance Criteria
-- [ ] Category suggestion chips in Step 1 of create wizard
-- [ ] Price suggestion tooltip in Step 2
-- [ ] "Search with AI" toggle in search bar
-- [ ] Loading states for AI operations
+- [x] `chargebacks` table: id, payment_id, order_id, stripe_dispute_id, amount, currency, reason, status (open/won/lost/under_review), evidence_due_by, created_at, updated_at
+- [x] Stripe webhook handles `charge.dispute.created`, `charge.dispute.updated`, `charge.dispute.closed`
+- [x] `GET /api/v1/admin/chargebacks` — list all chargebacks (admin only)
+- [x] `POST /api/v1/admin/chargebacks/:id/evidence` — submit evidence to Stripe
+- [x] Admin page `/support/chargebacks` — list + detail + submit evidence
+- [x] `go build ./...` passes
 
-### Files
-- `frontend/src/components/ai/category-suggest.tsx`
-- `frontend/src/components/ai/price-suggest.tsx`
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/chargebacks/model.go     — Chargeback struct
+  backend/internal/chargebacks/handler.go   — admin CRUD + webhook handlers
+  backend/internal/chargebacks/routes.go    — RegisterRoutes(v1, db)
+  admin/app/support/chargebacks/page.tsx    — Chargeback management page
 
----
-
-## EPIC 9 — DevOps & Infrastructure (TASK-086 → TASK-092)
+MODIFY:
+  backend/cmd/api/main.go                   — register chargeback routes
+  backend/internal/payments/webhook.go      — handle charge.dispute.* events
+  backend/pkg/database/database.go          — add Chargeback to AutoMigrate
+```
 
 ---
-
-## TASK-086: Structured Logging with Zap
-**Epic:** DevOps | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-001 | **Go Status:** Partial
-
-### Description
-Replace fmt.Println/log calls with structured Zap logging throughout the codebase.
-
-### Acceptance Criteria
-- [ ] Global zap logger initialized in main.go (already partially done)
-- [ ] All handlers use zap for error logging
-- [ ] Request logging middleware with method, path, status, duration
-- [ ] JSON format in production, console in development
-
-### Files
-- `backend/cmd/api/main.go` — ensure zap is used consistently
-- `backend/pkg/middleware/logger.go` — create request logger middleware
 
----
+## TASK-038: Email Templates Manager
 
-## TASK-087: Redis Caching Layer
-**Epic:** DevOps | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-003
+**Phase:** 8 — Admin Dashboard Gaps
+**Priority:** MEDIUM
+**Effort:** M (1 day)
+**Layer:** Both
+**Status:** [x] Done
+**Depends on:** None
 
-### Description
-Add Redis caching for frequently accessed data: categories (5min), popular listings (2min), user profiles (1min).
+### Context
+Screenshot 5 shows "Email Templates — لكل حدث" (per-event email templates). Currently emails are sent via SMTP job handlers but templates are hardcoded. Admins need to customize email content without code changes.
 
 ### Acceptance Criteria
-- [ ] Cache wrapper with get-or-set pattern
-- [ ] Categories cached for 5 minutes
-- [ ] Popular/featured listings cached for 2 minutes
-- [ ] Cache invalidation on data mutation
-- [ ] Cache miss logged with zap
-
-### Files
-- `backend/pkg/cache/cache.go` — create cache wrapper
-- `backend/internal/listings/handler.go` — add caching
+- [x] `email_templates` table: id, event_type (welcome/order_confirmed/password_reset/etc.), subject, body_html, body_text, variables (JSON), is_active, updated_at, updated_by
+- [x] `GET /api/v1/admin/email-templates` — list all templates
+- [x] `PUT /api/v1/admin/email-templates/:event_type` — update template
+- [x] `POST /api/v1/admin/email-templates/:event_type/preview` — render preview with sample data
+- [x] Job handlers use DB templates (fallback to hardcoded if not found)
+- [x] Admin page `/content/emails` enhanced with template editor + preview
+- [x] Seed 10 default templates (welcome, order_confirmed, order_shipped, password_reset, etc.)
+- [x] `go build ./...` passes
 
----
-
-## TASK-088: Kubernetes Manifests
-**Epic:** DevOps | **Type:** feature | **Priority:** P1 | **Estimate:** 4h | **Depends on:** TASK-008
-
-### Description
-Create K8s manifests for production deployment: Deployment, Service, Ingress, HPA, ConfigMap, Secrets.
-
-### Acceptance Criteria
-- [ ] API Deployment with 3 replicas, resource limits, health probes
-- [ ] Service (ClusterIP) and Ingress (with TLS)
-- [ ] HPA: min 3, max 10, target CPU 70%
-- [ ] ConfigMap for non-sensitive env vars
-- [ ] Secret for sensitive env vars
-- [ ] PostgreSQL and Redis as managed services (external)
+### Files to Create / Modify
+```
+CREATE:
+  backend/internal/emailtpl/model.go        — EmailTemplate struct
+  backend/internal/emailtpl/handler.go      — CRUD + preview
+  backend/internal/emailtpl/routes.go       — RegisterRoutes(v1, db)
+  backend/internal/emailtpl/seed.go         — default templates
 
-### Files
-- `k8s/deployment.yaml`
-- `k8s/service.yaml`
-- `k8s/ingress.yaml`
-- `k8s/hpa.yaml`
-- `k8s/configmap.yaml`
+MODIFY:
+  backend/cmd/api/main.go                   — register email template routes
+  backend/pkg/database/database.go          — add EmailTemplate to AutoMigrate
+  backend/pkg/jobs/handlers.go              — load template from DB before sending
+  admin/app/content/emails/page.tsx         — enhance with template CRUD
+```
 
 ---
 
-## TASK-089: Production Dockerfile
-**Epic:** DevOps | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-001
+## TASK-039: Addon Marketplace
 
-### Description
-Multi-stage Dockerfile for production build: build in Go image, run in distroless/static.
+**Phase:** 9 — Extensibility & Integrations
+**Priority:** HIGH
+**Effort:** M (1 day)
+**Layer:** Both
+**Status:** [x] Done
+**Depends on:** None
 
-### Acceptance Criteria
-- [ ] Stage 1: Build with `golang:1.23-alpine`
-- [ ] Stage 2: Run with `gcr.io/distroless/static-debian12`
-- [ ] Binary size < 20MB
-- [ ] Non-root user
-- [ ] Health check included
-
-### Files
-- `backend/Dockerfile` — create production Dockerfile
-
----
+### Context
+Inspired by Mnbara's plugin-system (PluginManager, PluginRegistry, PluginMarketplace), this adds a full addon marketplace to the admin dashboard. Admins can browse, install, enable/disable, and configure platform addons/integrations without code changes.
 
-## TASK-090: GitHub Actions CD
-**Epic:** DevOps | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-008, TASK-089
-
-### Description
-CD pipeline: build Docker image, push to registry, deploy to K8s on merge to main.
-
 ### Acceptance Criteria
-- [ ] Triggered on merge to main
-- [ ] Builds and tags Docker image
-- [ ] Pushes to container registry (GHCR or ECR)
-- [ ] Deploys to K8s cluster via kubectl or Helm
+- [x] `addons` table: id, slug, name, description, category, tags, author, version, download_count, avg_rating, rating_count, is_free, price, currency, is_verified, is_official, permissions, hooks, config_schema, status, config, installed_at
+- [x] `addon_versions` table: id, addon_id, version, changelog, download_url, min/max_core_version, dependencies, manifest
+- [x] `addon_reviews` table: id, addon_id, user_id, rating (1-5), review, version
+- [x] `GET /api/v1/admin/addons` — list addons with search, category, status filters
+- [x] `GET /api/v1/admin/addons/stats` — marketplace statistics
+- [x] `POST /api/v1/admin/addons/:id/install` — install addon
+- [x] `POST /api/v1/admin/addons/:id/uninstall` — uninstall addon
+- [x] `POST /api/v1/admin/addons/:id/enable` — enable installed addon
+- [x] `POST /api/v1/admin/addons/:id/disable` — disable enabled addon
+- [x] `PUT /api/v1/admin/addons/:id/config` — update addon configuration
+- [x] `GET/POST /api/v1/admin/addons/:id/reviews` — list/add reviews
+- [x] Admin page `/marketplace` — browse, install, enable/disable addons with stats dashboard
+- [x] Seed 8 default addons (Stripe Payments, GA4, Mailchimp, AR Viewer, WhatsApp, Loyalty, SEO, Fraud Shield)
+- [x] `go build ./...` passes
 
-### Files
-- `.github/workflows/cd.yml`
+### Files Created / Modified
+```
+CREATE:
+  backend/internal/addons/model.go     — Addon, AddonVersion, AddonReview structs
+  backend/internal/addons/handler.go   — marketplace CRUD + lifecycle handlers
+  backend/internal/addons/routes.go    — RegisterRoutes(v1, db, rdb)
+  backend/internal/addons/seed.go      — 8 default marketplace addons
+  admin/app/marketplace/page.tsx      — Marketplace admin page
 
+MODIFY:
+  backend/cmd/api/main.go             — register addon routes
+  backend/pkg/database/database.go    — AutoMigrate + seed
+  admin/lib/api.ts                    — addonsApi
+```
+
 ---
 
-## TASK-091: Database Migrations with goose
-**Epic:** DevOps | **Type:** feature | **Priority:** P1 | **Estimate:** 3h | **Depends on:** TASK-001
+## TASK-040: CMS — WordPress-like Content Management
 
-### Description
-Replace GORM AutoMigrate with goose for production-safe migrations.
+**Phase:** 9 — Extensibility & Integrations
+**Priority:** HIGH
+**Effort:** L (2 days)
+**Layer:** Both
+**Status:** [x] Done
+**Depends on:** None
 
-### Technical Notes
-AutoMigrate is convenient for dev but dangerous in production (can't rollback, doesn't handle column renames). Use `pressly/goose` for versioned SQL migrations. Keep AutoMigrate for dev mode only.
+### Context
+The user wants WordPress-like control over the site — manage banners, sliders, content, media, settings, and navigation from the admin dashboard without needing a developer.
 
 ### Acceptance Criteria
-- [ ] goose installed and configured
-- [ ] Initial migration from current GORM schema
-- [ ] Migration runner in main.go (only in production mode)
-- [ ] AutoMigrate still used when APP_ENV=development
-- [ ] Rollback tested for at least one migration
-
-### Files
-- `backend/migrations/` — create migration directory
-- `backend/pkg/database/database.go` — conditional migrate strategy
-
----
-
-## TASK-092: Monitoring & Observability
-**Epic:** DevOps | **Type:** feature | **Priority:** P1 | **Estimate:** 4h | **Depends on:** TASK-086
+- [x] `hero_slides` table — banner slider with title, subtitle, image, link, badge, scheduling, reorder
+- [x] `content_blocks` table — reusable content sections (HTML, hero, CTA, FAQ, features, testimonial, markdown, image)
+- [x] `media_files` table — upload and manage images/videos/documents with folders
+- [x] `site_settings` table — global settings (branding, contact, social, SEO, general) with typed inputs
+- [x] `nav_menus` table — drag-and-drop menu builder (header, footer, mobile, sidebar)
+- [x] Admin CRUD for all 5 CMS entities
+- [x] Public API endpoints (no auth) for frontend to consume CMS data
+- [x] File upload with folder organization
+- [x] Bulk settings update
+- [x] Navigation reorder
+- [x] Seed default data (3 hero slides, 5 content blocks, 26 site settings, 11 nav items)
+- [x] Admin page `/cms` with 5 tabs (Slides, Blocks, Media, Settings, Nav)
+- [x] `go build ./...` passes
 
-### Description
-Add Prometheus metrics endpoint and OpenTelemetry tracing.
-
-### Acceptance Criteria
-- [ ] GET /metrics endpoint with Prometheus format
-- [ ] Request count, latency histogram, error rate
-- [ ] DB query duration metrics
-- [ ] WebSocket connection count gauge
-- [ ] Grafana dashboard template
+### Files Created / Modified
+```
+CREATE:
+  backend/internal/cms/model.go      — HeroSlide, ContentBlock, MediaFile, SiteSetting, NavMenu
+  backend/internal/cms/handler.go    — CRUD + upload + public API
+  backend/internal/cms/routes.go     — admin + public routes
+  backend/internal/cms/seed.go      — default CMS data
+  admin/app/cms/page.tsx            — CMS admin page with 5 tabs
 
-### Files
-- `backend/pkg/middleware/metrics.go`
-- `backend/cmd/api/main.go` — register /metrics
+MODIFY:
+  backend/cmd/api/main.go           — register CMS routes + static files
+  backend/pkg/database/database.go  — AutoMigrate + seed
+  admin/lib/api.ts                  — cmsApi
+```
 
 ---
 
-## EPIC 10 — Polish & i18n (TASK-093 → TASK-098)
+# Progress Tracker
 
----
+| Phase | Description | Total Tasks | Done | In Progress | Blocked |
+|-------|-------------|-------------|------|-------------|---------|
+| Phase 0 | Foundation (Backend) | 5 | 5 | 0 | 0 |
+| Phase 1 | Critical Frontend | 6 | 6 | 0 | 0 |
+| Phase 2 | Trust & Guidance Pages | 7 | 7 | 0 | 0 |
+| Phase 3 | Seller Tools | 5 | 5 | 0 | 0 |
+| Phase 4 | Support & Communication | 3 | 3 | 0 | 0 |
+| Phase 5 | Infrastructure & Observability | 5 | 5 | 0 | 0 |
+| Phase 6 | Growth & Acquisition | 3 | 3 | 0 | 0 |
+| Phase 7+ | Future Roadmap | 10 | 10 | 0 | 0 |
+| Phase 8 | Admin Dashboard Gaps | 4 | 4 | 0 | 0 |
+| Phase 9 | Extensibility & Integrations | 2 | 2 | 0 | 0 |
+| **TOTAL** | | **50** | **50** | **0** | **0** |
 
-## TASK-093: Frontend User Profile Page
-**Epic:** Polish | **Type:** feature | **Priority:** P0 | **Estimate:** 4h | **Depends on:** TASK-032
+---
 
-### Description
-User profile page with avatar, bio, listings tab, reviews tab, and edit profile form.
+# Quick Reference — Task Index
 
-### Acceptance Criteria
-- [ ] Avatar display with upload option (own profile)
-- [ ] Name, bio, location, join date
-- [ ] Tabs: Active Listings, Reviews, About
-- [ ] Edit profile form (own profile only)
-- [ ] Star rating display
+| ID | Phase | Layer | Effort | Title |
+|----|-------|-------|--------|-------|
+| TASK-001 | 0 | Backend | L | Order Management — Backend Models & API |
+| TASK-002 | 0 | Backend | M | Shopping Cart — Backend Service |
+| TASK-003 | 0 | Backend | S | Watchlist / Favorites — Backend |
+| TASK-004 | 0 | Backend | M | Refund & Dispute Resolution — Backend Completion |
+| TASK-005 | 0 | Backend | M | Seller Analytics — Backend Data Endpoints |
+| TASK-006 | 1 | Frontend | L | Order Management Pages |
+| TASK-007 | 1 | Frontend | M | Cart Page + Cart Icon Component |
+| TASK-008 | 1 | Frontend | M | Connect Listing ? Cart ? Checkout Flow |
+| TASK-009 | 1 | Frontend | S | Watchlist / Favorites Page |
+| TASK-010 | 1 | Frontend | S | Legal Pages — Terms, Privacy, Cookie Policy |
+| TASK-011 | 1 | Frontend | S | Refund Page + Chargeback Page |
+| TASK-012 | 2 | Frontend | M | Help Center & FAQ Page |
+| TASK-013 | 2 | Frontend | S | How It Works Page |
+| TASK-014 | 2 | Frontend | S | Buyer Protection Page |
+| TASK-015 | 2 | Frontend | S | Seller Protection Page |
+| TASK-016 | 2 | Frontend | S | About Us Page |
+| TASK-017 | 2 | Frontend | S | Shipping & Delivery Info Page |
+| TASK-018 | 2 | Frontend | S | Fee Calculator Page |
+| TASK-019 | 3 | Frontend | M | Seller Analytics Dashboard Page |
+| TASK-020 | 3 | Both | S | Seller Storefront Analytics |
+| TASK-021 | 3 | Frontend | M | Loyalty Program Frontend |
+| TASK-022 | 3 | Frontend | S | Notification Settings Page |
+| TASK-023 | 3 | Both | L | Deals & Promotions — Backend + Frontend |
+| TASK-024 | 4 | Frontend | S | Contact & Support Page |
+| TASK-025 | 4 | Both | M | Support Ticket System |
+| TASK-026 | 4 | Both | M | Founder / Owner Dashboard |
+| TASK-027 | 5 | Both | S | Sentry Error Tracking |
+| TASK-028 | 5 | Backend | S | Prometheus Metrics Endpoint |
+| TASK-029 | 5 | Infra | S | Grafana + Prometheus Docker Compose |
+| TASK-030 | 5 | Backend | M | Complete All Job Handler Stubs |
+| TASK-031 | 5 | Both | L | PayPal Payment Integration |
+| TASK-032 | 6 | Both | L | Referral / Affiliate Program |
+| TASK-033 | 6 | Both | XL | Subscription / Plans System ? |
+| TASK-034 | 6 | Both | M | Product Request System |
+| TASK-F01 | 7+ | Both | XL | Live Streaming Auctions ? |
+| TASK-F02 | 7+ | Both | XL | Crowdshipping / Traveler Delivery ? |
+| TASK-F03 | 7+ | Both | XL | P2P Currency / Item Exchange ? |
+| TASK-F04 | 7+ | Both | L | AI Chatbot Widget |
+| TASK-F05 | 7+ | Backend | XL | Fraud Detection Service ? |
+| TASK-F06 | 7+ | Both | L | BNPL Integration |
+| TASK-F07 | 7+ | Both | L | Crypto Payments |
+| TASK-F08 | 7+ | Frontend | XL | AR / VR Product Preview ? |
+| TASK-F09 | 7+ | Both | XL | Blockchain / Smart Contracts ? |
+| TASK-F10 | 7+ | Both | XL | Plugin Marketplace ? |
 
-### Files
-- `frontend/src/app/(main)/profile/[id]/page.tsx`
-- `frontend/src/app/(main)/profile/edit/page.tsx`
+> ? = Freelancer Recommended for XL tasks requiring specialized domain knowledge
 
 ---
 
-## TASK-094: Frontend Responsive Navigation
-**Epic:** Polish | **Type:** feature | **Priority:** P0 | **Estimate:** 3h | **Depends on:** TASK-032
+## 🔐 Production Readiness Roadmap
 
-### Description
-Responsive navbar with logo, search, create listing CTA, chat badge, notifications dropdown, and user avatar menu.
-
-### Acceptance Criteria
-- [ ] Desktop: full navbar with all elements
-- [ ] Mobile: hamburger menu + bottom tab bar
-- [ ] Chat unread badge (from GET /chat/unread)
-- [ ] User dropdown: My Listings, My Auctions, Profile, Settings, Logout
-- [ ] Search bar with autocomplete suggestions
+> All items below are tracked as part of the security hardening initiative (Phase PR).
+> Evidence for each item is captured in `git` commit history and the sign-off template.
 
-### Files
-- `frontend/src/components/layout/navbar.tsx`
-- `frontend/src/components/layout/mobile-nav.tsx`
-- `frontend/src/components/layout/user-menu.tsx`
+### Phase PR-1: Security Hardening
 
----
+#### PR-1.1 — Security Headers & HTTPS
+- [x] `SecurityHeaders` middleware adds `X-Frame-Options`, `X-Content-Type-Options`, `X-XSS-Protection`, `Strict-Transport-Security`, `Referrer-Policy`
+- [x] `ContentSecurityPolicy` middleware registered globally
+- [x] HTTPS enforcement: production binds to TLS / behind reverse proxy; non-prod allows HTTP
 
-## TASK-095: Arabic (RTL) Support
-**Epic:** Polish | **Type:** feature | **Priority:** P1 | **Estimate:** 4h | **Depends on:** TASK-094
+#### PR-1.2 — Input Validation & SQL Injection Prevention
+- [x] `security.SanitizeText` / `security.SanitizeHTML` applied to all user-supplied string fields
+- [x] KYC fields sanitized before DB write
+- [x] Search query sanitized; `offset` validated non-negative
+- [x] Profile update fields (`UpdateMe`) sanitized
+- [x] Payment free-text fields (notes, description) sanitized and currency normalized
+- [x] All GORM queries use parameterized values — no raw string interpolation
 
-### Description
-Full Arabic localization with RTL layout, translation files, and language switcher.
+#### PR-1.3 — Password Security
+- [x] Argon2id hashing with tuned cost parameters
+- [x] `POST /auth/change-password` endpoint — old password verification + session revocation
+- [x] Password strength enforced on registration, reset, and change
 
-### Technical Notes
-Use `next-intl` or `i18next`. Category names already have `name_ar`. User model has `language` preference. RTL support via `dir="rtl"` on HTML element.
+#### PR-1.4 — Token Security
+- [x] RS256-signed JWTs (asymmetric, private key not exposed via API)
+- [x] Refresh token rotation: single-use tokens in Redis, reuse detection triggers full session revocation
+- [x] `POST /auth/logout` revokes refresh token; audit log emitted
+- [x] Access token expiry: 15 min; refresh token expiry: 7 days
 
-### Acceptance Criteria
-- [ ] Language switcher (EN/AR) in navbar
-- [ ] All static text translated
-- [ ] RTL layout for Arabic
-- [ ] Category names display in user's language
-- [ ] Date/number formatting per locale
-- [ ] Persisted in user preferences
+#### PR-1.5 — Security Audit Log
+- [x] `security_audit_logs` table with async writes (never blocks request)
+- [x] Risk scoring per event type (0–100)
+- [x] Events covered: `login`, `logout`, `register`, `password_reset`, `kyc_submitted`, `kyc_approved`, `kyc_rejected`, `payment_attempt`, `escrow_released`, `refund_requested`, `wallet_topup`, `rate_limited`, `session_revoked`
+- [x] `session_revoked` elevates to risk 90 when reason is `refresh_token_reuse_detected`
 
-### Files
-- `frontend/src/i18n/en.json`
-- `frontend/src/i18n/ar.json`
-- `frontend/src/components/layout/language-switcher.tsx`
+#### PR-1.6 — KYC Field Encryption
+- [x] PII fields (`full_name`, `id_number`) encrypted at rest with XChaCha20-Poly1305
+- [x] `FIELD_ENCRYPTION_KEY` (32-byte base64) loaded from env; required in production
+- [x] Decrypt-on-read in status and admin endpoints (callers see plaintext)
 
 ---
-
-## TASK-096: Dark Mode
-**Epic:** Polish | **Type:** feature | **Priority:** P1 | **Estimate:** 2h | **Depends on:** TASK-094
-
-### Description
-Dark mode toggle with system preference detection and Tailwind dark classes.
-
-### Acceptance Criteria
-- [ ] Toggle in navbar (sun/moon icon)
-- [ ] System preference detection on first visit
-- [ ] Persisted in localStorage
-- [ ] All components styled for dark mode
-- [ ] Smooth transition between modes
 
-### Files
-- `frontend/src/components/layout/theme-toggle.tsx`
-- `frontend/src/lib/theme.ts`
+### Phase PR-2: Fintech Security
 
----
+#### PR-2.1 — Rate Limiting
+- [x] Redis sliding-window rate limiter middleware (`pkg/middleware/ratelimit.go`)
+- [x] Per-route limits: register (3/hr), login (5/15min), refresh (10/min), forgot-password (3/hr)
+- [x] Global API bucket: 100 req/min per IP
+- [x] `rate_limited` audit log event emitted on every 429 (both global and auth-specific limiters)
 
-## TASK-097: SEO & Meta Tags
-**Epic:** Polish | **Type:** feature | **Priority:** P0 | **Estimate:** 2h | **Depends on:** TASK-033
+#### PR-2.2 — Idempotency & Race Condition Prevention
+- [x] `IdempotentRequest` table: unique `(user_id, idempotency_key)` with 24-hr TTL
+- [x] `X-Idempotency-Key` header honoured by `Deposit`, `Withdraw`, `CreateEscrow`
+- [x] All financial writes (`Deposit`, `Withdraw`, `CreateEscrow`, `ReleaseEscrow`) wrapped in `db.Transaction`
+- [x] `SELECT ... FOR UPDATE` row-level locking on `wallet_balances` rows prevents TOCTOU over-debit
 
-### Description
-Dynamic meta tags for all pages: title, description, Open Graph, Twitter Cards.
+#### PR-2.3 — IDOR Protection
+- [x] `wallet.ReleaseEscrow` — admin-only route (`AdminWithDB` + `AdminOnly` middleware)
+- [x] `payments.ReleaseEscrow` — caller must be the buyer (`escrow.BuyerID == user_id` check)
+- [x] Deposit / Withdraw / CreateEscrow scoped to authenticated `user_id` from JWT
 
-### Technical Notes
-Use Next.js `generateMetadata` in page components. Listing detail: title = listing title, description = truncated description, image = cover image. Auction detail: include current bid in description.
+#### PR-2.4 — Escrow State Machine
+- [x] `wallet.ReleaseEscrow` locks escrow row with `FOR UPDATE` before checking state
+- [x] Only `PENDING → COMPLETED` transition allowed; `already_processed` sentinel error returned otherwise
+- [x] All balance mutations and escrow status update happen atomically in one DB transaction
 
-### Acceptance Criteria
-- [ ] Every page has unique title and description
-- [ ] Open Graph tags for social sharing
-- [ ] Twitter Card tags
-- [ ] Listing images as og:image
-- [ ] Structured data (JSON-LD) for listings
+#### PR-2.5 — Stripe Webhook Verification & Idempotency
+- [x] `webhook.ConstructEvent` HMAC-SHA256 verification (`STRIPE_WEBHOOK_SECRET` env var)
+- [x] `ProcessedStripeEvent` table with unique `stripe_event_id` index
+- [x] Duplicate events (Stripe retries) acknowledged with 200 and skipped without re-processing
+- [x] Event record inserted **before** dispatch to survive crash-restart replays
 
-### Files
-- `frontend/src/app/(main)/listings/[id]/page.tsx` — add generateMetadata
-- `frontend/src/app/(main)/auctions/[id]/page.tsx` — add generateMetadata
+#### PR-2.6 — Fraud Detection Baseline
+- [x] `fraud.AnalyzeTransaction` wired into `CreatePaymentIntent`
+- [x] Score ≥ 80 → transaction declined + `payment_attempt` audit log with `fraud_declined: true`
+- [x] Score ≥ 50 → transaction allowed but flagged with `fraud_flagged: true` in audit log
+- [x] `FraudAlert` created automatically for high-risk scores via existing `fraud` package
 
 ---
 
-## TASK-098: E2E Test Suite
-**Epic:** Polish | **Type:** feature | **Priority:** P0 | **Estimate:** 5h | **Depends on:** TASK-089
+### Phase PR-3: Performance
 
-### Description
-End-to-end test suite covering critical user flows: register → create listing → search → chat → bid → payment.
+#### PR-3.1 — Database Indexes
+- [x] `idx_sal_user_created` — `security_audit_logs (user_id, created_at DESC)`
+- [x] `idx_sal_event_created` — `security_audit_logs (event_type, created_at DESC)`
+- [x] `idx_payments_user_status` — `payments (user_id, status)`
+- [x] `idx_wallet_tx_wallet_created` — `wallet_transactions (wallet_id, created_at DESC)`
+- [x] `idx_escrows_status` / `idx_escrows_buyer` — escrow state & owner queries
+- [x] `idx_processed_stripe_event` — webhook dedup lookup
+- [x] `idx_idempotent_req_lookup` — idempotency check lookup
 
-### Technical Notes
-Use Playwright for browser E2E tests. Test against Docker Compose environment. Seed test data before each suite. Cover both happy path and key error cases.
-
-### Acceptance Criteria
-- [ ] User registration and login flow
-- [ ] Create listing with images
-- [ ] Search and filter listings
-- [ ] Start chat from listing detail
-- [ ] Create auction and place bid
-- [ ] Featured listing payment flow
-- [ ] Admin login and moderation
-- [ ] Tests pass in CI (GitHub Actions)
-- [ ] Test coverage report generated
-
-### Files
-- `frontend/e2e/auth.spec.ts`
-- `frontend/e2e/listings.spec.ts`
-- `frontend/e2e/auctions.spec.ts`
-- `frontend/e2e/chat.spec.ts`
-- `frontend/e2e/payments.spec.ts`
-- `frontend/playwright.config.ts`
-
-
-  ---
-
-  ## TASK-099: React Native Mobile App — GeoCore
-  **Status:** ✅ Done
-  **Type:** feature
-  **Priority:** P1
-  **Completed:** 2026-03-22
-
-  ### What was built
-  - React Native + Expo SDK 53 (Latest)
-  - TypeScript strict mode — 0 errors
-  - eBay-style UI with Walmart colors (#0071CE Blue + #FFC220 Yellow)
-  - Zustand state management + JWT auth with expo-secure-store
-  - EAS Build configured for APK + IPA
-
-  ### Screens
-  - HomeScreen (search + categories + live auctions + listings grid)
-  - ListingDetailScreen (images, price, bid CTA, seller info)
-  - AuctionsScreen (live countdown timers, real-time bidding UI)
-  - SearchScreen (filters: category, price range, location, condition)
-  - CreateListingScreen (image upload, category, pricing type)
-  - ChatScreen (conversation threads, unread badges)
-  - ProfileScreen (stats, wallet balance, menu, sign in/out)
-  - LoginScreen + RegisterScreen (email + password, form validation)
-
-  ### Components
-  - ListingCard (AUCTION / BUY NOW badges, countdown overlay)
-  - AuctionCard (live countdown, current bid, bidder count)
-  - CountdownTimer (updates every second via useEffect interval)
-  - SearchBar (full-width, keyboard-aware)
-  - FloatingActionButton (yellow + sell button, bottom-right)
-
-  ### API Integration
-  - axios client pointing at https://geo-core-next.replit.app/api/v1
-  - Bearer token injection via request interceptor
-  - Automatic token refresh on 401 via response interceptor
-  - listingsAPI, authAPI, auctionsAPI, messagesAPI, walletAPI modules
-
-  ### Build
-  - APK: `eas build --platform android --profile preview`
-  - IPA: `eas build --platform ios --profile production`
-  - Bundle ID: com.geocore.next (iOS + Android)
-
-  ---
-
-  ## TASK-100: App Store Submission
-  **Status:** ❌ Not Started
-  **Type:** chore
-  **Priority:** P2
-  **Depends on:** TASK-099
-
-  ### Description
-  Submit app to Google Play Store and Apple App Store.
-
-  ### Requirements
-  - Google Play Developer account ($25 one-time)
-  - Apple Developer account ($99/year)
-  - App icons (1024×1024)
-  - Screenshots for all screen sizes (phone + tablet)
-  - App description in EN + AR
-  - Privacy policy URL
-
-  ### Checklist
-  - [ ] Generate signed keystore for Android
-  - [ ] Run `eas build --platform android --profile production`
-  - [ ] Upload AAB to Google Play Console
-  - [ ] Run `eas build --platform ios --profile production`
-  - [ ] Upload IPA to App Store Connect via Transporter
-  - [ ] Submit for review
-  
+#### PR-3.2 — Redis Caching
+- [x] `pkg/cache` helper: `Get / Set / Del` with JSON marshalling
+- [x] `GET /listings` — cached 2 min for unfiltered page-1 requests
+- [x] `GET /listings/:id` — cached 5 min for unauthenticated reads
+- [x] Cache invalidated on `PUT /listings/:id` and `DELETE /listings/:id`

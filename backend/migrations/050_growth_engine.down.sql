@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS experiment_bandit_pulls;
+DROP TABLE IF EXISTS experiment_bandit_arms;
+DROP TABLE IF EXISTS experiment_events;
+DROP TABLE IF EXISTS experiment_assignments;
+DROP TABLE IF EXISTS experiments;
+DROP TABLE IF EXISTS messaging_user_prefs;
+DROP TABLE IF EXISTS messaging_cooldowns;
+DROP TABLE IF EXISTS messaging_messages;
+DROP TABLE IF EXISTS growth_decision_logs;
+DROP TABLE IF EXISTS growth_reengagement_logs;
+DROP TABLE IF EXISTS growth_dopamine_events;
+DROP TABLE IF EXISTS growth_action_events;
+DROP TABLE IF EXISTS growth_user_states;

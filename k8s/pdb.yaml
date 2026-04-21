@@ -1,0 +1,22 @@
+# ── PodDisruptionBudgets — ensure zero-downtime rolling deploys ───────────────
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-pdb
+  namespace: geocore-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: geocore-backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: worker-pdb
+  namespace: geocore-prod
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: geocore-worker

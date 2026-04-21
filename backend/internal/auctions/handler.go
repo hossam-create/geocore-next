@@ -1,24 +1,34 @@
 package auctions
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/geocore-next/backend/internal/freeze"
+	"github.com/geocore-next/backend/internal/moderation"
 	"github.com/geocore-next/backend/pkg/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Handler struct {
-	db  *gorm.DB
-	rdb *redis.Client
+	db           *gorm.DB
+	rdb          *redis.Client
+	dutchManager *DutchAuctionManager
 }
 
 func NewHandler(db *gorm.DB, rdb *redis.Client) *Handler {
-	return &Handler{db, rdb}
+	return &Handler{db: db, rdb: rdb}
+}
+
+// SetDutchManager sets the DutchAuctionManager on the handler.
+func (h *Handler) SetDutchManager(m *DutchAuctionManager) {
+	h.dutchManager = m
 }
 
 func (h *Handler) List(c *gin.Context) {
@@ -101,6 +111,15 @@ func (h *Handler) Create(c *gin.Context) {
 
 	listingID, _ := uuid.Parse(req.ListingID)
 	now := time.Now()
+	var listingText struct {
+		Title       string
+		Description string
+	}
+	h.db.Table("listings").Select("title, description").Where("id = ?", listingID).First(&listingText)
+	if blocked, reason := moderation.CheckContent(listingText.Title, listingText.Description); blocked {
+		response.BadRequest(c, reason)
+		return
+	}
 
 	auctionType := AuctionTypeStandard
 	if req.Type != "" {
@@ -144,7 +163,85 @@ func (h *Handler) Create(c *gin.Context) {
 		response.InternalError(c, err)
 		return
 	}
+
+	// Sprint 8.5: Audit log for auction_started
+	freeze.LogAudit(h.db, "auction_started", sellerID, auction.ID, fmt.Sprintf("type=%s start_price=%.2f auction_id=%s", auctionType, req.StartPrice, auction.ID))
+
+	// Start dutch ticker if applicable
+	if auctionType == AuctionTypeDutch && h.dutchManager != nil {
+		h.dutchManager.StartTicker(auction.ID)
+	}
+
 	response.Created(c, auction)
+}
+
+func (h *Handler) Update(c *gin.Context) {
+	sellerID, err := uuid.Parse(c.MustGet("user_id").(string))
+	if err != nil {
+		response.Unauthorized(c)
+		return
+	}
+	auctionID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		response.BadRequest(c, "Invalid ID")
+		return
+	}
+
+	var auction Auction
+	if err := h.db.First(&auction, "id = ? AND seller_id = ?", auctionID, sellerID).Error; err != nil {
+		response.NotFound(c, "Auction")
+		return
+	}
+
+	var req struct {
+		ReservePrice      *float64 `json:"reserve_price"`
+		BuyNowPrice       *float64 `json:"buy_now_price"`
+		Currency          string   `json:"currency"`
+		AntiSnipeEnabled  *bool    `json:"anti_snipe_enabled"`
+		DutchDropInterval *int     `json:"dutch_drop_interval"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	var listingText struct {
+		Title       string
+		Description string
+	}
+	if err := h.db.Table("listings").Select("title, description").Where("id = ?", auction.ListingID).First(&listingText).Error; err == nil {
+		if blocked, reason := moderation.CheckContent(listingText.Title, listingText.Description); blocked {
+			response.BadRequest(c, reason)
+			return
+		}
+	}
+
+	updates := map[string]any{}
+	if req.ReservePrice != nil {
+		updates["reserve_price"] = req.ReservePrice
+	}
+	if req.BuyNowPrice != nil {
+		updates["buy_now_price"] = req.BuyNowPrice
+	}
+	if req.Currency != "" {
+		updates["currency"] = req.Currency
+	}
+	if req.AntiSnipeEnabled != nil {
+		updates["anti_snipe_enabled"] = *req.AntiSnipeEnabled
+	}
+	if req.DutchDropInterval != nil {
+		updates["dutch_drop_interval"] = *req.DutchDropInterval
+	}
+
+	if len(updates) == 0 {
+		response.OK(c, auction)
+		return
+	}
+	if err := h.db.Model(&auction).Updates(updates).Error; err != nil {
+		response.InternalError(c, err)
+		return
+	}
+	response.OK(c, auction)
 }
 
 func (h *Handler) PlaceBid(c *gin.Context) {
@@ -152,6 +249,12 @@ func (h *Handler) PlaceBid(c *gin.Context) {
 	auctionID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		response.BadRequest(c, "Invalid ID")
+		return
+	}
+
+	// Sprint 8.5: Block frozen users from bidding
+	if freeze.IsUserFrozen(h.db, userID) {
+		response.Forbidden(c)
 		return
 	}
 
@@ -166,88 +269,89 @@ func (h *Handler) PlaceBid(c *gin.Context) {
 		return
 	}
 
+	// Fast pre-check: reject if seller is bidding (no lock needed — self-reference is stable)
+	var sellerCheck struct{ SellerID uuid.UUID }
+	if h.db.Table("auctions").Select("seller_id").Where("id = ?", auctionID).Scan(&sellerCheck).Error == nil {
+		if sellerCheck.SellerID == userID {
+			response.BadRequest(c, "Cannot bid on your own auction")
+			return
+		}
+	}
+
+	// ── Idempotency check (F6): return cached bid if same key already submitted ──
+	if req.IdempotencyKey != nil && *req.IdempotencyKey != "" {
+		var existing Bid
+		if h.db.Where("auction_id = ? AND user_id = ? AND idempotency_key = ?",
+			auctionID, userID, *req.IdempotencyKey).First(&existing).Error == nil {
+			response.Created(c, gin.H{"bid": existing, "idempotent": true})
+			return
+		}
+	}
+
+	var bid Bid
 	var auction Auction
-	if err := h.db.First(&auction, "id = ? AND status = ?", auctionID, StatusActive).Error; err != nil {
-		response.NotFound(c, "Auction")
-		return
-	}
-
-	if time.Now().After(auction.EndsAt) {
-		response.BadRequest(c, "Auction has ended")
-		return
-	}
-
-	if auction.SellerID == userID {
-		response.BadRequest(c, "Cannot bid on your own auction")
-		return
-	}
-
-	// Handle different auction types
-	switch auction.Type {
-	case AuctionTypeDutch:
-		// Dutch auction: first bid at current price wins
-		currentPrice := auction.GetCurrentDutchPrice()
-		if req.Amount < currentPrice {
-			response.BadRequest(c, fmt.Sprintf("Bid must be at least %.2f (current Dutch price)", currentPrice))
-			return
-		}
-		// Dutch auction ends immediately on first valid bid
-		h.completeDutchAuction(&auction, userID, currentPrice)
-		response.OK(c, gin.H{"message": "You won the Dutch auction!", "price": currentPrice})
-		return
-
-	case AuctionTypeReverse:
-		// Reverse auction: lower bids are better
-		if auction.BidCount > 0 && req.Amount >= auction.CurrentBid {
-			response.BadRequest(c, fmt.Sprintf("Bid must be lower than %.2f", auction.CurrentBid))
-			return
-		}
-
-	default: // Standard auction
-		minBid := auction.CurrentBid
-		if auction.BidCount == 0 {
-			minBid = auction.StartPrice - 0.01
-		}
-		if req.Amount <= minBid {
-			response.BadRequest(c, fmt.Sprintf("Bid must be higher than %.2f", minBid))
-			return
-		}
-	}
-
-	bid := Bid{
-		ID:             uuid.New(),
-		AuctionID:      auctionID,
-		UserID:         userID,
-		Amount:         req.Amount,
-		IsAuto:         req.IsAuto,
-		MaxAmount:      req.MaxAmount,
-		IdempotencyKey: req.IdempotencyKey,
-		PlacedAt:       time.Now(),
-	}
-
-	// Find previous leader to notify
-	var prevBid Bid
-	var prevLeaderID *uuid.UUID
-	if auction.BidCount > 0 {
-		if h.db.Where("auction_id = ? AND user_id != ?", auctionID, userID).
-			Order("amount DESC").First(&prevBid).Error == nil {
-			prevLeaderID = &prevBid.UserID
-		}
-	}
-
-	// Anti-sniping: extend auction if bid in last 2 minutes
 	var extended bool
-	if auction.AntiSnipeEnabled && auction.ExtensionCount < MaxExtensions {
-		timeRemaining := time.Until(auction.EndsAt)
-		if timeRemaining <= AntiSnipeWindow {
-			auction.EndsAt = auction.EndsAt.Add(AntiSnipeExtension)
-			auction.ExtensionCount++
-			extended = true
-		}
-	}
+	var prevLeaderID *uuid.UUID
 
-	h.db.Transaction(func(tx *gorm.DB) error {
-		tx.Create(&bid)
+	// ── ALL validation + mutation inside one transaction with FOR UPDATE ─────────
+	// FOR UPDATE on the auction row serialises concurrent bids — prevents TOCTOU
+	// where two goroutines both read the same current_bid and both pass the check.
+	dbErr := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&auction, "id = ? AND status = ?", auctionID, StatusActive).Error; err != nil {
+			return fmt.Errorf("auction_not_found")
+		}
+		if time.Now().After(auction.EndsAt) {
+			return fmt.Errorf("auction_ended")
+		}
+
+		// Validate amount per auction type — all inside the lock
+		switch auction.Type {
+		case AuctionTypeDutch:
+			currentPrice := auction.GetCurrentDutchPrice()
+			if req.Amount < currentPrice {
+				return fmt.Errorf("bid_too_low:%.2f", currentPrice)
+			}
+		case AuctionTypeReverse:
+			if auction.BidCount > 0 && req.Amount >= auction.CurrentBid {
+				return fmt.Errorf("bid_not_lower:%.2f", auction.CurrentBid)
+			}
+		default:
+			minBid := auction.CurrentBid
+			if auction.BidCount == 0 {
+				minBid = auction.StartPrice - 0.01
+			}
+			if req.Amount <= minBid {
+				return fmt.Errorf("bid_too_low:%.2f", minBid)
+			}
+		}
+
+		// Find previous leader while still inside the lock
+		var prevBid Bid
+		if auction.BidCount > 0 {
+			if tx.Where("auction_id = ? AND user_id != ?", auctionID, userID).
+				Order("amount DESC").First(&prevBid).Error == nil {
+				prevLeaderID = &prevBid.UserID
+			}
+		}
+
+		// Anti-sniping: extend if bid placed in last AntiSnipeWindow
+		if auction.AntiSnipeEnabled && auction.ExtensionCount < MaxExtensions {
+			if time.Until(auction.EndsAt) <= AntiSnipeWindow {
+				auction.EndsAt = auction.EndsAt.Add(AntiSnipeExtension)
+				auction.ExtensionCount++
+				extended = true
+			}
+		}
+
+		bid = Bid{
+			ID: uuid.New(), AuctionID: auctionID, UserID: userID,
+			Amount: req.Amount, IsAuto: req.IsAuto, MaxAmount: req.MaxAmount,
+			IdempotencyKey: req.IdempotencyKey, PlacedAt: time.Now(),
+		}
+		if err := tx.Create(&bid).Error; err != nil {
+			return err
+		}
 		updates := map[string]interface{}{
 			"current_bid": req.Amount,
 			"bid_count":   gorm.Expr("bid_count + 1"),
@@ -256,20 +360,31 @@ func (h *Handler) PlaceBid(c *gin.Context) {
 			updates["ends_at"] = auction.EndsAt
 			updates["extension_count"] = auction.ExtensionCount
 		}
-		tx.Model(&auction).Updates(updates)
-		return nil
+		return tx.Model(&auction).Updates(updates).Error
 	})
 
-	// Process proxy bids from other users
-	go h.processProxyBids(&auction, userID, req.Amount)
+	if dbErr != nil {
+		switch dbErr.Error() {
+		case "auction_not_found":
+			response.NotFound(c, "Auction")
+		case "auction_ended":
+			response.BadRequest(c, "Auction has ended")
+		default:
+			// bid_too_low or bid_not_lower carry the threshold in the sentinel
+			response.BadRequest(c, dbErr.Error())
+		}
+		return
+	}
 
-	// Broadcast via Redis Pub/Sub
+	// ── Post-commit: proxy bids + pub/sub + notifications (non-critical) ───────
+	go h.processProxyBids(&auction, userID, req.Amount)
 	h.rdb.Publish(c, fmt.Sprintf("auction:%s", auctionID),
 		fmt.Sprintf(`{"bid": %.2f, "user": "%s", "extended": %v, "ends_at": "%s"}`,
 			req.Amount, userID, extended, auction.EndsAt.Format(time.RFC3339)))
-
-	// Send notifications async
 	go notifyNewBid(&auction, userID, prevLeaderID, req.Amount)
+
+	// Sprint 8.5: Audit log for bid_placed
+	freeze.LogAudit(h.db, "bid_placed", userID, auctionID, fmt.Sprintf("amount=%.2f auction_id=%s", req.Amount, auctionID))
 
 	result := gin.H{"bid": bid}
 	if extended {
@@ -288,42 +403,59 @@ func (h *Handler) BuyNow(c *gin.Context) {
 		return
 	}
 
+	// Sprint 8.5: Block frozen users from buying
+	if freeze.IsUserFrozen(h.db, userID) {
+		response.Forbidden(c)
+		return
+	}
+
 	var auction Auction
-	if err := h.db.First(&auction, "id = ? AND status = ?", auctionID, StatusActive).Error; err != nil {
-		response.NotFound(c, "Auction")
-		return
-	}
+	var buyNowPrice float64
 
-	if auction.BuyNowPrice == nil {
-		response.BadRequest(c, "Buy Now not available for this auction")
-		return
-	}
-
-	if auction.SellerID == userID {
-		response.BadRequest(c, "Cannot buy your own item")
-		return
-	}
-
-	// Complete the auction
-	now := time.Now()
-	h.db.Model(&auction).Updates(map[string]interface{}{
-		"status":      StatusSold,
-		"winner_id":   userID,
-		"current_bid": *auction.BuyNowPrice,
-		"ends_at":     now,
+	// ── FOR UPDATE serialises concurrent BuyNow calls on the same auction ──
+	// Without the lock two goroutines both see StatusActive and both mark SOLD.
+	dbErr := h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			First(&auction, "id = ? AND status = ?", auctionID, StatusActive).Error; err != nil {
+			return fmt.Errorf("not_found")
+		}
+		if auction.BuyNowPrice == nil {
+			return fmt.Errorf("no_buy_now")
+		}
+		if auction.SellerID == userID {
+			return fmt.Errorf("own_item")
+		}
+		buyNowPrice = *auction.BuyNowPrice
+		return tx.Model(&auction).Updates(map[string]interface{}{
+			"status":      StatusSold,
+			"winner_id":   userID,
+			"current_bid": buyNowPrice,
+			"ends_at":     time.Now(),
+		}).Error
 	})
 
-	// Broadcast auction ended
+	if dbErr != nil {
+		switch dbErr.Error() {
+		case "not_found":
+			response.NotFound(c, "Auction")
+		case "no_buy_now":
+			response.BadRequest(c, "Buy Now not available for this auction")
+		case "own_item":
+			response.BadRequest(c, "Cannot buy your own item")
+		default:
+			response.InternalError(c, dbErr)
+		}
+		return
+	}
+
 	h.rdb.Publish(c, fmt.Sprintf("auction:%s", auctionID),
-		fmt.Sprintf(`{"event": "buy_now", "winner": "%s", "price": %.2f}`, userID, *auction.BuyNowPrice))
+		fmt.Sprintf(`{"event": "buy_now", "winner": "%s", "price": %.2f}`, userID, buyNowPrice))
+	go notifyAuctionWon(userID, auction.SellerID, auctionID.String(), buyNowPrice, auction.Currency)
 
-	// Notify seller
-	go notifyAuctionWon(userID, auction.SellerID, auctionID.String(), *auction.BuyNowPrice, auction.Currency)
+	// Sprint 8.5: Audit log for auction_won (BuyNow)
+	freeze.LogAudit(h.db, "auction_won", userID, auctionID, fmt.Sprintf("method=buy_now price=%.2f auction_id=%s", buyNowPrice, auctionID))
 
-	response.OK(c, gin.H{
-		"message": "Purchase successful!",
-		"price":   *auction.BuyNowPrice,
-	})
+	response.OK(c, gin.H{"message": "Purchase successful!", "price": buyNowPrice})
 }
 
 // SetProxyBid sets up automatic bidding
@@ -332,6 +464,12 @@ func (h *Handler) SetProxyBid(c *gin.Context) {
 	auctionID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		response.BadRequest(c, "Invalid ID")
+		return
+	}
+
+	// Sprint 8.5: Block frozen users from proxy bidding
+	if freeze.IsUserFrozen(h.db, userID) {
+		response.Forbidden(c)
 		return
 	}
 
@@ -387,13 +525,27 @@ func (h *Handler) GetBids(c *gin.Context) {
 
 // completeDutchAuction ends a Dutch auction with the winner
 func (h *Handler) completeDutchAuction(auction *Auction, winnerID uuid.UUID, price float64) {
+	// Stop the dutch ticker first
+	if h.dutchManager != nil {
+		h.dutchManager.StopTicker(auction.ID)
+	}
+
 	h.db.Model(auction).Updates(map[string]interface{}{
 		"status":      StatusSold,
 		"winner_id":   winnerID,
 		"current_bid": price,
 		"ends_at":     time.Now(),
 	})
+
+	// Broadcast sold event via Redis
+	h.rdb.Publish(context.Background(), fmt.Sprintf("auction:%s", auction.ID),
+		fmt.Sprintf(`{"type":"dutch_sold","auction_id":"%s","winner":"%s","price":%.2f}`,
+			auction.ID, winnerID, price))
+
 	go notifyAuctionWon(winnerID, auction.SellerID, auction.ID.String(), price, auction.Currency)
+
+	// Sprint 8.5: Audit log for auction_won (Dutch)
+	freeze.LogAudit(h.db, "auction_won", winnerID, auction.ID, fmt.Sprintf("method=dutch price=%.2f auction_id=%s", price, auction.ID))
 }
 
 // processProxyBids handles automatic bidding

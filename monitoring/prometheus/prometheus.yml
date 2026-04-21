@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: geocore_api
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ["api:8080"]
+    bearer_token: geocore_metrics_token_dev

@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS live_bids;
+DROP TABLE IF EXISTS live_items;

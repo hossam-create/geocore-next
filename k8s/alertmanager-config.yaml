@@ -1,0 +1,82 @@
+# ── Alertmanager Configuration ──────────────────────────────────────────────
+# Routes: P0 → PagerDuty/Opsgenie | P1 → Slack | P2 → Email digest
+
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "smtp.geocore.dev:587"
+  smtp_from: "alerts@geocore.dev"
+
+route:
+  receiver: "default-slack"
+  group_by: ["alertname", "severity", "team"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # P0 — Critical: immediate page
+    - match:
+        severity: critical
+      receiver: "pagerduty"
+      group_wait: 10s
+      repeat_interval: 15m
+
+    # P1 — Warning: Slack
+    - match:
+        severity: warning
+      receiver: "slack-warnings"
+      group_wait: 1m
+      repeat_interval: 30m
+
+    # P2 — Info: Email digest
+    - match:
+        severity: info
+      receiver: "email-digest"
+      group_wait: 5m
+      repeat_interval: 24h
+
+    # Finance team alerts — always page
+    - match:
+        team: finance
+      receiver: "pagerduty"
+      group_wait: 10s
+      repeat_interval: 15m
+
+receivers:
+  - name: "default-slack"
+    slack_configs:
+      - api_url: "https://hooks.slack.com/services/XXX"
+        channel: "#geocore-alerts"
+        title: "{{ .GroupLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+
+  - name: "pagerduty"
+    pagerduty_configs:
+      - routing_key: "XXX"
+        severity: "{{ .GroupLabels.severity }}"
+
+  - name: "slack-warnings"
+    slack_configs:
+      - api_url: "https://hooks.slack.com/services/XXX"
+        channel: "#geocore-warnings"
+        title: "⚠️ {{ .GroupLabels.alertname }}"
+        text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"
+
+  - name: "email-digest"
+    email_configs:
+      - to: "platform-team@geocore.dev"
+        send_resolved: true
+
+inhibit_rules:
+  # If P0 fires, suppress P1 and P2 for same alert
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["alertname", "team"]
+
+  - source_match:
+      severity: warning
+    target_match:
+      severity: info
+    equal: ["alertname", "team"]

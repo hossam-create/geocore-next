@@ -1,0 +1,15 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_orders_payment_intent;
+DROP INDEX CONCURRENTLY IF EXISTS idx_orders_status_created;
+DROP INDEX CONCURRENTLY IF EXISTS idx_payments_buyer;
+DROP INDEX CONCURRENTLY IF EXISTS idx_payments_seller;
+DROP INDEX CONCURRENTLY IF EXISTS idx_payments_status;
+DROP INDEX CONCURRENTLY IF EXISTS idx_wallets_user_id;
+DROP INDEX CONCURRENTLY IF EXISTS idx_wallet_balances_wallet_currency;
+DROP INDEX CONCURRENTLY IF EXISTS idx_wallet_tx_type_status;
+DROP INDEX CONCURRENTLY IF EXISTS idx_escrow_order_id;
+DROP INDEX CONCURRENTLY IF EXISTS idx_escrow_seller;
+DROP INDEX CONCURRENTLY IF EXISTS idx_disputes_order;
+DROP INDEX CONCURRENTLY IF EXISTS idx_disputes_status;
+DROP INDEX CONCURRENTLY IF EXISTS idx_users_role;
+DROP INDEX CONCURRENTLY IF EXISTS idx_reviews_listing;
+DROP INDEX CONCURRENTLY IF EXISTS idx_idempotent_user_key;
