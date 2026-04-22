@@ -15,14 +15,41 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.geocore.next"
+      "bundleIdentifier": "com.geocore.next",
+      "buildNumber": "1",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "GeoCore needs access to your camera so you can photograph items you want to list for sale or include in chat messages.",
+        "NSPhotoLibraryUsageDescription": "GeoCore needs access to your photo library so you can select pictures for your listings and chat messages.",
+        "NSPhotoLibraryAddUsageDescription": "GeoCore needs permission to save photos you download from listings to your photo library.",
+        "NSLocationWhenInUseUsageDescription": "GeoCore uses your location to show nearby listings, auctions, and delivery requests, and to set the location of items you post.",
+        "NSMicrophoneUsageDescription": "GeoCore needs access to your microphone to record voice messages in chat.",
+        "NSUserTrackingUsageDescription": "This identifier will be used to deliver personalized listings and relevant recommendations to you.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.geocore.next",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#0071CE"
-      }
+      },
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -36,7 +63,28 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "GeoCore needs access to your photo library so you can select pictures for your listings and chat messages.",
+          "cameraPermission": "GeoCore needs access to your camera so you can photograph items you want to list for sale."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "GeoCore uses your location to show nearby listings, auctions, and delivery requests."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#0071CE",
+          "defaultChannel": "default"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
