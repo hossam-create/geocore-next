@@ -41,6 +41,12 @@ const (
 	EventAdminAction       = "admin_action"
 	EventSessionRevoked    = "session_revoked"
 	EventRateLimited       = "rate_limited"
+	Event2FAEnabled        = "2fa_enabled"
+	Event2FADisabled       = "2fa_disabled"
+	Event2FAFailed         = "2fa_failed"
+	Event2FAVerified       = "2fa_verified"
+	Event2FABackupUsed     = "2fa_backup_used"
+	Event2FABackupRegen    = "2fa_backup_regenerated"
 )
 
 // LogEvent writes a security event to the audit log.
@@ -96,6 +102,12 @@ func assessRisk(eventType string, details map[string]any, c *gin.Context) int {
 		}
 	case EventAdminAction:
 		score = 40
+	case Event2FAFailed:
+		score = 50
+	case Event2FADisabled:
+		score = 30
+	case Event2FABackupUsed:
+		score = 20
 	}
 	// Boost risk if user-agent looks automated
 	ua := strings.ToLower(c.Request.UserAgent())

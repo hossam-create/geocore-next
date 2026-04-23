@@ -14,6 +14,7 @@ import (
 	"github.com/geocore-next/backend/internal/ads"
 	"github.com/geocore-next/backend/internal/analytics"
 	"github.com/geocore-next/backend/internal/auctions"
+	"github.com/geocore-next/backend/internal/auth"
 	"github.com/geocore-next/backend/internal/backup"
 	"github.com/geocore-next/backend/internal/cancellation"
 	"github.com/geocore-next/backend/internal/chargebacks"
@@ -40,6 +41,7 @@ import (
 	"github.com/geocore-next/backend/internal/payments"
 	"github.com/geocore-next/backend/internal/pricing"
 	"github.com/geocore-next/backend/internal/protection"
+	"github.com/geocore-next/backend/internal/push"
 	"github.com/geocore-next/backend/internal/recommendations"
 	"github.com/geocore-next/backend/internal/redteam"
 	"github.com/geocore-next/backend/internal/reviews"
@@ -226,9 +228,13 @@ func AutoMigrate(db *gorm.DB) error {
 		&analytics.RouteMetrics{},
 		&wallet.IdempotentRequest{},
 		&images.Image{},
+		&images.ListingImageAssoc{},
+		&auth.User2FA{},
 		&notifications.Notification{},
 		&notifications.NotificationPreference{},
 		&notifications.PushToken{},
+		&push.UserDevice{},
+		&push.PushLog{},
 		&admin.AdminLog{},
 		&kyc.KYCProfile{},
 		&kyc.KYCDocument{},

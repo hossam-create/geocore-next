@@ -86,6 +86,12 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
 			h.ResetPassword,
 		)
 
+		// ── 2FA (public — uses challenge token, not session) ────────────────────
+		a.POST("/2fa/verify",
+			rl.Limit(10, 15*time.Minute, "auth:2fa:verify:ip"),
+			h.Verify2FA,
+		)
+
 		// ── Auth-required endpoints ───────────────────────────────────────────
 		authed := a.Group("")
 		authed.Use(middleware.Auth())
@@ -103,6 +109,22 @@ func RegisterRoutes(r *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
 			authed.POST("/resend-verification",
 				rl.LimitByUser(5, time.Hour, "auth:resend:user"),
 				h.ResendVerification,
+			)
+
+			// ── 2FA management (auth-required) ────────────────────────────────────
+			authed.POST("/2fa/enable",
+				rl.LimitByUser(3, time.Hour, "auth:2fa:enable:user"),
+				h.Enable2FA,
+			)
+			authed.POST("/2fa/confirm", h.ConfirmEnable2FA)
+			authed.POST("/2fa/disable",
+				rl.LimitByUser(3, time.Hour, "auth:2fa:disable:user"),
+				h.Disable2FA,
+			)
+			authed.GET("/2fa/status", h.Get2FAStatus)
+			authed.POST("/2fa/backup-codes",
+				rl.LimitByUser(3, time.Hour, "auth:2fa:backup:user"),
+				h.RegenerateBackupCodes,
 			)
 		}
 	}

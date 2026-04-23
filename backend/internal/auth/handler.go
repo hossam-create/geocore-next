@@ -184,8 +184,8 @@ func (h *Handler) Register(c *gin.Context) {
 	// Send email verification asynchronously (non-blocking)
 	h.sendInitialVerificationEmail(&user)
 
-	// Send welcome email
-	go email.SendWelcomeEmail(user.Email, user.Name)
+	// Send welcome email — already async via SendAsync pipeline
+	_ = email.SendWelcomeEmail(user.Email, user.Name)
 
 	accessToken, err := generateAccessToken(user.ID.String(), user.Email)
 	if err != nil {
@@ -235,6 +235,23 @@ func (h *Handler) Login(c *gin.Context) {
 	security.LogEvent(h.db, c, &user.ID, security.EventLoginSuccess, map[string]any{
 		"email": security.MaskEmail(user.Email),
 	})
+
+	// ── 2FA check ────────────────────────────────────────────────────────────
+	svc := NewTwoFAService(h.db)
+	if svc.Is2FAEnabled(user.ID) {
+		challengeToken, err := Generate2FAChallengeToken(user.ID.String())
+		if err != nil {
+			response.InternalError(c, err)
+			return
+		}
+		response.OK(c, gin.H{
+			"requires_2fa":    true,
+			"challenge_token": challengeToken,
+			"expires_in":      int(twoFATokenExpiry.Seconds()),
+			"message":         "2FA verification required. POST /auth/2fa/verify with your code.",
+		})
+		return
+	}
 
 	accessToken, err := generateAccessToken(user.ID.String(), user.Email)
 	if err != nil {
