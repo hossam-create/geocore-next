@@ -129,10 +129,13 @@ func RegisterRoutes(v1 *gin.RouterGroup, db *gorm.DB, rdb ...*redis.Client) {
 	}
 
 	// Sprint 15: Growth analytics (separate admin group)
-	growth := v1.Group("/admin/growth")
-	growth.Use(middleware.Auth(), middleware.AdminWithDB(db))
+	// NOTE: /admin/growth/metrics is also registered by internal/growth/growth_handler.go
+	// — keep only one to avoid Gin "handlers are already registered" panic at startup.
+	// The livestream-specific metrics are exposed under /admin/live/growth-metrics instead.
+	liveGrowth := v1.Group("/admin/live/growth-metrics")
+	liveGrowth.Use(middleware.Auth(), middleware.AdminWithDB(db))
 	{
-		growth.GET("/metrics", la.AdminGrowthMetrics)
+		liveGrowth.GET("", la.AdminGrowthMetrics)
 	}
 
 	// Sprint 16: Creator admin routes

@@ -190,6 +190,7 @@ func AutoMigrate(db *gorm.DB) error {
 	db.Exec(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`)
 	db.Exec(`CREATE EXTENSION IF NOT EXISTS "pg_trgm"`)
 	db.Exec(`CREATE EXTENSION IF NOT EXISTS "unaccent"`)
+	db.Exec(`CREATE EXTENSION IF NOT EXISTS "postgis"`)
 
 	err := db.AutoMigrate(
 		&users.User{},

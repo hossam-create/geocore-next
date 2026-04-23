@@ -1,6 +1,6 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM golang:1.23-alpine AS builder
-RUN apk add --no-cache git gcc musl-dev
+FROM golang:1.25-alpine AS builder
+RUN apk add --no-cache git gcc musl-dev ca-certificates
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
