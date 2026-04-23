@@ -1,0 +1,165 @@
+{
+  "mappings": {
+    "properties": {
+      "id": {
+        "type": "keyword"
+      },
+      "title": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          },
+          "suggest": {
+            "type": "completion",
+            "analyzer": "simple"
+          },
+          "ngram": {
+            "type": "text",
+            "analyzer": "ngram_analyzer"
+          },
+          "phonetic": {
+            "type": "text",
+            "analyzer": "phonetic_analyzer"
+          }
+        },
+        "analyzer": "standard"
+      },
+      "description": {
+        "type": "text",
+        "fields": {
+          "ngram": {
+            "type": "text",
+            "analyzer": "ngram_analyzer"
+          }
+        },
+        "analyzer": "standard"
+      },
+      "price": {
+        "type": "double"
+      },
+      "currency": {
+        "type": "keyword"
+      },
+      "category": {
+        "type": "keyword",
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "standard"
+          }
+        }
+      },
+      "location": {
+        "type": "keyword",
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "standard"
+          }
+        }
+      },
+      "geo_location": {
+        "type": "geo_point"
+      },
+      "condition": {
+        "type": "keyword"
+      },
+      "seller_id": {
+        "type": "keyword"
+      },
+      "seller_name": {
+        "type": "text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "status": {
+        "type": "keyword"
+      },
+      "view_count": {
+        "type": "integer"
+      },
+      "search_click_count": {
+        "type": "integer"
+      },
+      "search_impression_count": {
+        "type": "integer"
+      },
+      "created_at": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      },
+      "last_searched_at": {
+        "type": "date"
+      },
+      "last_viewed_at": {
+        "type": "date"
+      },
+      "images": {
+        "type": "keyword"
+      },
+      "tags": {
+        "type": "keyword"
+      },
+      "language": {
+        "type": "keyword"
+      },
+      "popularity_score": {
+        "type": "float"
+      },
+      "recency_score": {
+        "type": "float"
+      },
+      "rank_score": {
+        "type": "float"
+      }
+    }
+  },
+  "settings": {
+    "number_of_shards": 3,
+    "number_of_replicas": 1,
+    "analysis": {
+      "analyzer": {
+        "ngram_analyzer": {
+          "type": "custom",
+          "tokenizer": "ngram_tokenizer",
+          "filter": [
+            "lowercase"
+          ]
+        },
+        "phonetic_analyzer": {
+          "type": "custom",
+          "tokenizer": "standard",
+          "filter": [
+            "lowercase",
+            "phonetic_filter"
+          ]
+        }
+      },
+      "tokenizer": {
+        "ngram_tokenizer": {
+          "type": "ngram",
+          "min_gram": 2,
+          "max_gram": 3,
+          "token_chars": [
+            "letter",
+            "digit"
+          ]
+        }
+      },
+      "filter": {
+        "phonetic_filter": {
+          "type": "phonetic",
+          "encoder": "metaphone"
+        }
+      }
+    }
+  }
+}

@@ -26,4 +26,21 @@ func RegisterRoutes(rg *gin.RouterGroup, db *gorm.DB, rdb *redis.Client) {
 
 	// On-demand embedding for a specific listing (admin/indexer use)
 	rg.POST("/listings/:id/embed", h.EmbedListing)
+
+	// Analytics endpoints (auth-required)
+	authed := rg.Group("")
+	authed.Use(middleware.Auth())
+	{
+		authed.POST("/search/:listing_id/click", h.TrackClick)
+		authed.POST("/search/:listing_id/view", h.TrackView)
+	}
+
+	// Elasticsearch management endpoints (admin-only)
+	admin := rg.Group("/admin/search")
+	admin.Use(middleware.Auth())
+	{
+		admin.POST("/reindex", h.ReindexAll)
+		admin.GET("/status", h.ESStatus)
+		admin.POST("/index/:id", h.IndexSingleListing)
+	}
 }
