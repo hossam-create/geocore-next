@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/geocore-next/backend/pkg/locking"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -107,6 +108,7 @@ func ReleaseReservedFunds(tx *gorm.DB, userID uuid.UUID, amountCents int64) erro
 // ConvertReserveToHold converts a pending reserve into a real escrow hold.
 // Called at auction settlement when winner is confirmed.
 // Creates an Escrow record and a WalletTransaction.
+// Verifies that the buyer has sufficient PendingBalance before creating the escrow.
 func ConvertReserveToHold(db *gorm.DB, buyerID, sellerID uuid.UUID, amountCents int64, refType, refID string) (*Escrow, error) {
 	amountDec := decimal.NewFromInt(amountCents).Div(decimal.NewFromInt(100))
 	fee := amountDec.Mul(decimal.NewFromFloat(0.025)) // 2.5% fee
@@ -122,29 +124,51 @@ func ConvertReserveToHold(db *gorm.DB, buyerID, sellerID uuid.UUID, amountCents 
 		Type:        refType,
 	}
 
-	err := db.Transaction(func(tx *gorm.DB) error {
+	err := locking.RetryOnDeadlock(db, func(tx *gorm.DB) error {
+		// ── Lock wallet row for consistent lock ordering ────────────────────────
+		var w Wallet
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("user_id = ?", buyerID).First(&w).Error; err != nil {
+			return fmt.Errorf("buyer wallet not found for user %s", buyerID)
+		}
+
+		// ── Lock balance row — prevents concurrent ReleaseReservedFunds from ──
+		// draining pending while we create the escrow (TOCTOU guard).
+		var bal WalletBalance
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("wallet_id = ? AND currency = ?", w.ID, USD).First(&bal).Error; err != nil {
+			return fmt.Errorf("USD balance not found for user %s", buyerID)
+		}
+
+		// ── Verify pending balance covers the escrow amount ────────────────────
+		if bal.PendingBalance.LessThan(amountDec) {
+			return fmt.Errorf("insufficient pending balance: have %s pending, need %s for escrow", bal.PendingBalance.String(), amountDec.String())
+		}
+
 		// The funds are already in pending from ReserveFunds.
-		// We just create the escrow record — no balance mutation needed.
-		// The pending amount stays as-is until admin releases escrow.
+		// No balance mutation needed — pending stays as-is until admin releases escrow.
+		// Invariant is preserved: Balance == Available + Pending (unchanged).
+		if err := checkInvariant(bal); err != nil {
+			return err
+		}
+
 		if err := tx.Create(&escrow).Error; err != nil {
 			return err
 		}
 
-		// Record transaction for audit trail
-		var w Wallet
-		if err := tx.Where("user_id = ?", buyerID).First(&w).Error; err != nil {
-			return err
-		}
+		// Record transaction for audit trail with BalanceBefore/After
 		rt := "escrow_live_auction"
 		walletTx := WalletTransaction{
 			WalletID:      w.ID,
 			Type:          TransactionEscrow,
 			Currency:      USD,
 			Amount:        amountDec.Neg(),
+			BalanceBefore: bal.AvailableBalance,
+			BalanceAfter:  bal.AvailableBalance, // available unchanged; pending unchanged
 			Status:        StatusPending,
 			ReferenceID:   &refID,
 			ReferenceType: &rt,
-			Description:   fmt.Sprintf("Live auction escrow for %s #%s", refType, refID),
+			Description:   fmt.Sprintf("Live auction escrow for %s #%s | pending: %s", refType, refID, bal.PendingBalance.String()),
 		}
 		return tx.Create(&walletTx).Error
 	})
