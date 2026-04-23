@@ -10,6 +10,7 @@ import (
 
 	"github.com/geocore-next/backend/internal/chargebacks"
 	"github.com/geocore-next/backend/internal/subscriptions"
+	pkgemail "github.com/geocore-next/backend/pkg/email"
 	"github.com/geocore-next/backend/pkg/events"
 	"github.com/geocore-next/backend/pkg/kafka"
 	"github.com/geocore-next/backend/pkg/metrics"
@@ -185,6 +186,27 @@ func (h *Handler) handleWebhookPaymentSucceeded(event *stripe.Event) {
 		},
 	})
 	metrics.IncPaymentsProcessed()
+
+	// Send transaction receipt email — async, non-blocking
+	var buyer struct {
+		Email string
+		Name  string
+	}
+	h.db.Table("users").Where("id = ?", payment.UserID).Select("email, name").Scan(&buyer)
+	if buyer.Email != "" {
+		if err := pkgemail.SendTransactionReceiptEmail(
+			buyer.Email,
+			buyer.Name,
+			payment.UserID.String(),
+			payment.ID.String(),
+			payment.Description,
+			payment.Amount,
+			payment.Currency,
+		); err != nil {
+			slog.Warn("webhook: failed to send transaction receipt email",
+				"payment_id", payment.ID.String(), "error", err.Error())
+		}
+	}
 
 	// Transactional outbox for Kafka delivery
 	_ = kafka.WriteOutbox(h.db, kafka.TopicPayments, kafka.New(

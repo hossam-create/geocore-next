@@ -118,15 +118,13 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		"email": security.MaskEmail(user.Email),
 	})
 
-	// ── Send reset email asynchronously ───────────────────────────────────────
-	go func() {
-		if err := email.SendPasswordResetEmail(user.Email, user.Name, token); err != nil {
-			slog.Error("failed to send password reset email",
-				"user_id", user.ID.String(),
-				"error", err.Error(),
-			)
-		}
-	}()
+	// ── Send reset email — already async via SendAsync pipeline ────────────────
+	if err := email.SendPasswordResetEmail(user.Email, user.Name, user.ID.String(), token); err != nil {
+		slog.Error("failed to send password reset email",
+			"user_id", user.ID.String(),
+			"error", err.Error(),
+		)
+	}
 
 	response.OK(c, gin.H{"message": blindOK})
 }
@@ -238,15 +236,13 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 		"user_agent", c.Request.UserAgent(),
 	)
 
-	// ── Security confirmation email (non-blocking) ─────────────────────────────
-	go func() {
-		if err := email.SendPasswordChangedEmail(user.Email, user.Name); err != nil {
-			slog.Error("failed to send password changed confirmation",
-				"user_id", user.ID.String(),
-				"error", err.Error(),
-			)
-		}
-	}()
+	// ── Security confirmation email (non-blocking via SendAsync) ────────────────
+	if err := email.SendPasswordChangedEmail(user.Email, user.Name, user.ID.String()); err != nil {
+		slog.Error("failed to send password changed confirmation",
+			"user_id", user.ID.String(),
+			"error", err.Error(),
+		)
+	}
 
 	response.OK(c, gin.H{
 		"message": "Password reset successful. You can now sign in with your new password.",

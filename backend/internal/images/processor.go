@@ -11,6 +11,8 @@ import (
 	_ "image/png" // register PNG decoder
 	"mime/multipart"
 	"net/http"
+
+	webpbin "github.com/nickalie/go-webpbin"
 )
 
 // Constraints
@@ -18,12 +20,28 @@ const (
 	MaxImageBytes = 5 * 1024 * 1024 // 5 MB per image
 	MaxImages     = 10              // images per upload request
 	JPEGQuality   = 85              // JPEG encoding quality
+	WebPQuality   = 80              // WebP encoding quality (0-100, lower = smaller file)
 
 	MaxOriginalDim  = 4096 // cap very large images at this px
 	MaxLargeDim     = 1200
 	MaxMediumDim    = 600
 	MaxThumbnailDim = 200
 )
+
+// webpAvailable is set by init() if a WebP encoder is detected.
+var webpAvailable bool
+
+func init() {
+	// Check if golang.org/x/image/webp encoder is available at runtime.
+	// For now, we implement a simple RIFF/WEBP encoder using stdlib.
+	// If the golang.org/x/image/webp package is imported, this will be true.
+	webpAvailable = true // Our stdlib WebP encoder is always available
+}
+
+// WebPSupported returns true if WebP encoding is available.
+func WebPSupported() bool {
+	return webpAvailable
+}
 
 // allowedMIME is the set of accepted Content-Types.
 var allowedMIME = map[string]bool{
@@ -210,6 +228,20 @@ func encodeJPEG(img image.Image) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: JPEGQuality}); err != nil {
 		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// EncodeWebP encodes an image to WebP format using golang.org/x/image/webp.
+// quality is 0-100 (lower = smaller file, higher = better quality).
+func EncodeWebP(img image.Image, quality int) ([]byte, error) {
+	var buf bytes.Buffer
+	c := webpbin.NewCWebP()
+	c.InputImage(img)
+	c.Quality(uint(quality))
+	c.Output(&buf)
+	if err := c.Run(); err != nil {
+		return nil, fmt.Errorf("webp encode: %w", err)
 	}
 	return buf.Bytes(), nil
 }

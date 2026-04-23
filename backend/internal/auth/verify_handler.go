@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/geocore-next/backend/internal/users"
@@ -108,12 +109,10 @@ func (h *Handler) ResendVerification(c *gin.Context) {
 		return
 	}
 
-	// Send email asynchronously — token is persisted regardless
-	go func() {
-		if sendErr := email.SendVerificationEmail(user.Email, token); sendErr != nil {
-			fmt.Printf("[email] failed to send to %s: %v\n", user.Email, sendErr)
-		}
-	}()
+	// Send email — already async via SendAsync pipeline
+	if sendErr := email.SendVerificationEmail(user.Email, token); sendErr != nil {
+		slog.Error("failed to send verification email", "to", user.Email, "error", sendErr)
+	}
 
 	// Set Redis cooldown key so user cannot spam resend
 	h.rdb.Set(ctx, cooldownKey, 1, resendCooldown)
@@ -136,9 +135,8 @@ func (h *Handler) sendInitialVerificationEmail(user *users.User) {
 		"verification_token_expires_at": expiresAt,
 	})
 
-	go func() {
-		if sendErr := email.SendVerificationEmail(user.Email, token); sendErr != nil {
-			fmt.Printf("[email] failed to send initial email to %s: %v\n", user.Email, sendErr)
-		}
-	}()
+	// Send email — already async via SendAsync pipeline
+	if sendErr := email.SendVerificationEmail(user.Email, token); sendErr != nil {
+		slog.Error("failed to send initial verification email", "to", user.Email, "error", sendErr)
+	}
 }

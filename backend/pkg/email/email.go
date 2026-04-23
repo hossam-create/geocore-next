@@ -5,12 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
-	"net/smtp"
 	"os"
-	"strings"
-
-	"github.com/geocore-next/backend/pkg/circuit"
+	"time"
 )
 
 // GenerateToken creates a cryptographically secure random hex token.
@@ -24,10 +20,9 @@ func GenerateToken(byteLen int) (string, error) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Shared SMTP helper
+// Legacy SMTP config helper (kept for transactional.go BaseURL resolution)
 // ════════════════════════════════════════════════════════════════════════════
 
-// smtpConfig holds values read once from environment variables.
 type smtpConfig struct {
 	Host    string
 	Port    string
@@ -55,101 +50,89 @@ func loadSMTP() smtpConfig {
 	return cfg
 }
 
-// send transmits a plain-text email (protected by circuit breaker).
-// If SMTP is unconfigured it falls back to stdout logging so development works without a mail server.
+// send is the shared delivery helper used by transactional.go and the auth
+// functions below. It delegates to the global EmailService provider so the
+// active backend (smtp/ses/sendgrid) is respected without changing every call site.
 func send(cfg smtpConfig, to, subject, body string) error {
-	if cfg.Host == "" || cfg.From == "" {
-		fmt.Printf("[email-dev] To: %s | Subject: %s\n%s\n", to, subject, body)
-		return nil
+	msg := &Message{
+		To:        to,
+		Subject:   subject,
+		Text:      body,
+		CreatedAt: time.Now(),
 	}
-
-	var sb strings.Builder
-	printf := func(format string, args ...any) { fmt.Fprintf(&sb, format, args...) }
-	printf("From: GeoCore <%s>\r\n", cfg.From)
-	printf("To: %s\r\n", to)
-	printf("Subject: %s\r\n", subject)
-	printf("MIME-Version: 1.0\r\n")
-	printf("Content-Type: text/plain; charset=UTF-8\r\n")
-	printf("\r\n")
-	sb.WriteString(body)
-
-	msg := []byte(sb.String())
-	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
-	var auth smtp.Auth
-	if cfg.User != "" && cfg.Pass != "" {
-		auth = smtp.PlainAuth("", cfg.User, cfg.Pass, cfg.Host)
-	}
-
-	err := circuit.EmailBreaker.Execute(func(_ context.Context) error {
-		return smtp.SendMail(addr, auth, cfg.From, []string{to}, msg)
-	})
-	if err != nil {
-		slog.Warn("email circuit breaker blocked or send failed", "to", to, "error", err)
-	}
-	return err
+	return Default().Send(context.Background(), msg)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // Email: account verification
 // ════════════════════════════════════════════════════════════════════════════
 
-// SendVerificationEmail sends an account-verification link to the given address.
+// SendVerificationEmail sends an account-verification link via the OTP template.
+// Async — does not block the request lifecycle.
 func SendVerificationEmail(to, token string) error {
-	cfg := loadSMTP()
-	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", cfg.BaseURL, token)
+	baseURL := getEnvOr("APP_BASE_URL", "https://geocore.app")
+	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", baseURL, token)
+	return Default().SendAsync(context.Background(), &Message{
+		To:           to,
+		Subject:      "Verify your GeoCore email",
+		TemplateName: "notification",
+		Data: NotificationData(
+			"there",
+			"Verify Your Email Address",
+			"Please verify your email address to complete your GeoCore registration. This link expires in 24 hours.",
+			"Verify Email",
+			verifyURL,
+		),
+		IdempotencyKey: "verify:" + token,
+		CreatedAt:      time.Now(),
+	})
+}
 
-	body := fmt.Sprintf(
-		"Welcome to GeoCore!\n\n"+
-			"Please verify your email address by clicking the link below:\n\n"+
-			"  %s\n\n"+
-			"This link expires in 24 hours.\n\n"+
-			"If you did not create an account, you can safely ignore this email.\n\n"+
-			"— The GeoCore Team",
-		verifyURL,
-	)
+// ════════════════════════════════════════════════════════════════════════════
+// Email: OTP verification code
+// ════════════════════════════════════════════════════════════════════════════
 
-	if cfg.Host == "" || cfg.From == "" {
-		fmt.Printf("[email-dev] Verification token for %s: %s\n", to, token)
-		return nil
+// SendOTPEmail delivers a one-time verification code using the "otp" HTML template.
+// Async — does not block the request lifecycle.
+func SendOTPEmail(to, name, userID, otp string, expiresMin int) error {
+	if name == "" {
+		name = "there"
 	}
-	return send(cfg, to, "Verify your GeoCore email", body)
+	baseURL := getEnvOr("APP_BASE_URL", "https://geocore.app")
+	return Default().SendAsync(context.Background(), &Message{
+		To:             to,
+		ToName:         name,
+		UserID:         userID,
+		Subject:        "Your GeoCore verification code",
+		TemplateName:   "otp",
+		Data:           OTPData(name, otp, expiresMin, baseURL),
+		IdempotencyKey: "otp:" + userID + ":" + otp,
+		CreatedAt:      time.Now(),
+	})
 }
 
 // ════════════════════════════════════════════════════════════════════════════
 // Email: password reset request
 // ════════════════════════════════════════════════════════════════════════════
 
-// SendPasswordResetEmail delivers a password-reset link to the user.
-// Token is embedded in the URL — the frontend must extract it and POST it
-// to /api/v1/auth/reset-password.
-func SendPasswordResetEmail(to, name, token string) error {
-	cfg := loadSMTP()
-
+// SendPasswordResetEmail delivers a password-reset link using the HTML template.
+// Async — does not block the request lifecycle.
+func SendPasswordResetEmail(to, name, userID, token string) error {
 	if name == "" {
 		name = "there"
 	}
-
-	resetURL := fmt.Sprintf("%s/reset-password?token=%s", cfg.BaseURL, token)
-
-	body := fmt.Sprintf(
-		"Hi %s,\n\n"+
-			"We received a request to reset the password for your GeoCore account.\n\n"+
-			"Click the link below to set a new password:\n\n"+
-			"  %s\n\n"+
-			"⏰ This link expires in 1 hour.\n\n"+
-			"──────────────────────────────────────────────────\n"+
-			"If you did not request a password reset, you can safely ignore this\n"+
-			"email. Your password will not be changed.\n\n"+
-			"For security, this link can only be used once.\n\n"+
-			"— The GeoCore Security Team",
-		name, resetURL,
-	)
-
-	if cfg.Host == "" || cfg.From == "" {
-		fmt.Printf("[email-dev] Password reset token for %s: %s\n", to, token)
-		return nil
-	}
-	return send(cfg, to, "Reset your GeoCore password", body)
+	baseURL := getEnvOr("APP_BASE_URL", "https://geocore.app")
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, token)
+	return Default().SendAsync(context.Background(), &Message{
+		To:             to,
+		ToName:         name,
+		UserID:         userID,
+		Subject:        "Reset your GeoCore password",
+		TemplateName:   "password_reset",
+		Data:           PasswordResetData(name, resetURL, 1),
+		IdempotencyKey: "pwreset:" + token,
+		CreatedAt:      time.Now(),
+	})
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -157,31 +140,79 @@ func SendPasswordResetEmail(to, name, token string) error {
 // ════════════════════════════════════════════════════════════════════════════
 
 // SendPasswordChangedEmail sends a security alert after a successful password reset.
-// This notifies the account owner of the change so they can take action if it
-// was not initiated by them.
-func SendPasswordChangedEmail(to, name string) error {
-	cfg := loadSMTP()
-
+// Async — does not block the request lifecycle.
+func SendPasswordChangedEmail(to, name, userID string) error {
 	if name == "" {
 		name = "there"
 	}
+	baseURL := getEnvOr("APP_BASE_URL", "https://geocore.app")
+	return Default().SendAsync(context.Background(), &Message{
+		To:           to,
+		UserID:       userID,
+		Subject:      "Your GeoCore password was changed",
+		TemplateName: "notification",
+		Data: NotificationData(
+			name,
+			"Your password was changed",
+			"Your GeoCore password has been successfully changed. If you did not make this change, contact security@geocore.app immediately.",
+			"Go to Account",
+			baseURL+"/profile",
+		),
+		IdempotencyKey: "pwchanged:" + userID,
+		CreatedAt:      time.Now(),
+	})
+}
 
-	body := fmt.Sprintf(
-		"Hi %s,\n\n"+
-			"✅ Your GeoCore password has been successfully changed.\n\n"+
-			"If you made this change, no further action is needed.\n\n"+
-			"──────────────────────────────────────────────────\n"+
-			"⚠️  If you did NOT change your password, your account may be\n"+
-			"compromised. Please contact us immediately at security@geocore.app\n"+
-			"or reset your password again at:\n\n"+
-			"  %s/forgot-password\n\n"+
-			"— The GeoCore Security Team",
-		name, cfg.BaseURL,
-	)
+// ════════════════════════════════════════════════════════════════════════════
+// Email: transaction receipt
+// ════════════════════════════════════════════════════════════════════════════
 
-	if cfg.Host == "" || cfg.From == "" {
-		fmt.Printf("[email-dev] Password changed confirmation sent to %s\n", to)
-		return nil
+// SendTransactionReceiptEmail delivers a payment receipt using the
+// "transaction_receipt" HTML template. Called after successful payment.
+// Async — does not block the request lifecycle.
+func SendTransactionReceiptEmail(to, name, userID, orderID, itemTitle string, amount float64, currency string) error {
+	if name == "" {
+		name = "there"
 	}
-	return send(cfg, to, "Your GeoCore password was changed", body)
+	baseURL := getEnvOr("APP_BASE_URL", "https://geocore.app")
+	orderURL := fmt.Sprintf("%s/orders/%s", baseURL, orderID)
+	return Default().SendAsync(context.Background(), &Message{
+		To:             to,
+		ToName:         name,
+		UserID:         userID,
+		Subject:        fmt.Sprintf("Receipt for order #%s", orderID),
+		TemplateName:   "transaction_receipt",
+		Data:           TransactionReceiptData(name, orderID, itemTitle, amount, currency, orderURL),
+		IdempotencyKey: "receipt:" + orderID,
+		CreatedAt:      time.Now(),
+	})
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Email: escrow released
+// ════════════════════════════════════════════════════════════════════════════
+
+// SendEscrowReleasedEmail notifies a seller that their escrow has been released.
+// Async — does not block the request lifecycle.
+func SendEscrowReleasedEmail(to, name, userID, escrowID string, amount float64, currency string) error {
+	if name == "" {
+		name = "there"
+	}
+	baseURL := getEnvOr("APP_BASE_URL", "https://geocore.app")
+	return Default().SendAsync(context.Background(), &Message{
+		To:           to,
+		ToName:       name,
+		UserID:       userID,
+		Subject:      "Your escrow has been released",
+		TemplateName: "notification",
+		Data: NotificationData(
+			name,
+			"Escrow Released",
+			fmt.Sprintf("Good news! Your escrow for %.2f %s has been released to your wallet. The funds are now available for withdrawal.", amount, currency),
+			"View Wallet",
+			baseURL+"/wallet",
+		),
+		IdempotencyKey: "escrow_released:" + escrowID,
+		CreatedAt:      time.Now(),
+	})
 }

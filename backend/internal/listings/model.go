@@ -127,9 +127,17 @@ type Listing struct {
 type ListingImage struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"id"`
 	ListingID uuid.UUID `gorm:"type:uuid;not null;index" json:"listing_id"`
+	GroupID   uuid.UUID `gorm:"type:uuid;index" json:"group_id,omitempty"` // groups size variants from one upload
+	ImageID   uuid.UUID `gorm:"type:uuid;index" json:"image_id,omitempty"` // FK to images table
 	URL       string    `gorm:"not null" json:"url"`
+	Width     int       `gorm:"default:0" json:"width"`
+	Height    int       `gorm:"default:0" json:"height"`
+	Bytes     int64     `gorm:"default:0" json:"bytes"`
+	MimeType  string    `gorm:"size:50;default:'image/jpeg'" json:"mime_type"`
+	Variant   string    `gorm:"size:20;default:'large'" json:"variant"` // thumbnail|medium|large|original
 	SortOrder int       `gorm:"default:0" json:"sort_order"`
 	IsCover   bool      `gorm:"default:false" json:"is_cover"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // CategoryField defines a dynamic field for a category (e.g. year, mileage for vehicles).

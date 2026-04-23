@@ -62,6 +62,7 @@ import (
 	"github.com/geocore-next/backend/internal/plugins"
 	"github.com/geocore-next/backend/internal/pricing"
 	"github.com/geocore-next/backend/internal/protection"
+	"github.com/geocore-next/backend/internal/push"
 	"github.com/geocore-next/backend/internal/recommendations"
 	"github.com/geocore-next/backend/internal/redteam"
 	"github.com/geocore-next/backend/internal/referral"
@@ -90,6 +91,7 @@ import (
 	"github.com/geocore-next/backend/internal/wholesale"
 	pkganalytics "github.com/geocore-next/backend/pkg/analytics"
 	"github.com/geocore-next/backend/pkg/database"
+	pkgemail "github.com/geocore-next/backend/pkg/email"
 	"github.com/geocore-next/backend/pkg/events"
 	"github.com/geocore-next/backend/pkg/i18n"
 	"github.com/geocore-next/backend/pkg/jobs"
@@ -211,6 +213,15 @@ func main() {
 	// ── Redis memory + eviction monitoring ─────────────────────────────────
 	tracing.StartRedisMonitor(rdb)
 	tracing.StartGoroutineReporter()
+
+	// ── Email service — must be initialised before any goroutine sends email ──
+	pkgemail.SetDefault(pkgemail.New(rdb))
+	pkgemail.StartWorker()
+
+	// ── Push notification service ────────────────────────────────────────────
+	pushFCM := push.NewFirebaseClientFromEnv()
+	pushWSHub := push.NewPushWSHub()
+	go pushWSHub.Run()
 
 	middleware.RevocationRDB = rdb
 
@@ -478,6 +489,10 @@ func main() {
 	payments.RegisterRoutes(v1, dbWrite, rdb)
 	images.RegisterRoutes(v1, dbWrite, rdb)
 	notifHub, notifSvc := notifications.RegisterRoutes(v1, dbWrite, rdb)
+	pushSvc := push.RegisterRoutes(v1, dbWrite, rdb, pushFCM, pushWSHub)
+	push.SetDefault(pushSvc)
+	push.StartWorker()
+	defer push.StopWorker()
 	admin.RegisterRoutes(v1, dbWrite, rdb, jobQueue)
 	opsCronScheduler, opsAlertEngine := ops.RegisterRoutes(v1, dbWrite, rdb, jobQueue)
 	opsCronScheduler.Start()

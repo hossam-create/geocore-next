@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
+	"github.com/geocore-next/backend/internal/push"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -111,8 +113,8 @@ func (d *Dispatcher) Dispatch(userID uuid.UUID, msgType, channel string, metadat
 	}
 
 	d.db.Model(&msg).Updates(map[string]interface{}{
-		"status":    "sent",
-		"sent_at":   now,
+		"status":  "sent",
+		"sent_at": now,
 	})
 
 	// ── 9. Update cooldown ──────────────────────────────────────────────────────
@@ -172,16 +174,19 @@ func (d *Dispatcher) TriggerLoss(userID uuid.UUID, itemName string) *DispatchRes
 // ── Channel Implementations ─────────────────────────────────────────────────────────
 
 func (d *Dispatcher) sendPush(userID uuid.UUID, msg *Message) {
-	// In production: integrate with FCM/APNs
-	// For now: publish to Redis channel for WebSocket delivery
-	ctx := context.Background()
-	payload, _ := json.Marshal(map[string]interface{}{
-		"type":    msg.Type,
-		"title":   msg.Title,
-		"body":    msg.Body,
-		"user_id": userID.String(),
-	})
-	d.rdb.Publish(ctx, fmt.Sprintf("push:%s", userID), payload)
+	// Delegate to the production PushService pipeline:
+	// idempotency → rate limit → WS bridge → Firebase FCM → log → Kafka audit
+	pushSvc := push.Default()
+	pushMsg := &push.PushMessage{
+		UserID:           userID,
+		NotificationType: msg.Type,
+		Priority:         push.ResolvePriority(msg.Type),
+		Title:            msg.Title,
+		Body:             msg.Body,
+	}
+	if err := pushSvc.Send(context.Background(), pushMsg); err != nil {
+		slog.Warn("dispatcher: push send failed", "user_id", userID, "type", msg.Type, "error", err)
+	}
 }
 
 func (d *Dispatcher) sendEmail(userID uuid.UUID, msg *Message) {
@@ -298,11 +303,11 @@ func replaceAll(s, old, new string) string {
 // ── Messaging Metrics ──────────────────────────────────────────────────────────────
 
 type MessagingMetrics struct {
-	TotalSent    int64            `json:"total_sent"`
-	DeliveredRate float64         `json:"delivered_rate"`
-	OpenRate     float64          `json:"open_rate"`
-	ByType       map[string]int64 `json:"by_type"`
-	ByChannel    map[string]int64 `json:"by_channel"`
+	TotalSent     int64            `json:"total_sent"`
+	DeliveredRate float64          `json:"delivered_rate"`
+	OpenRate      float64          `json:"open_rate"`
+	ByType        map[string]int64 `json:"by_type"`
+	ByChannel     map[string]int64 `json:"by_channel"`
 }
 
 func GetMessagingMetrics(db *gorm.DB) *MessagingMetrics {
@@ -343,10 +348,10 @@ func GetMessagingMetrics(db *gorm.DB) *MessagingMetrics {
 	}
 
 	return &MessagingMetrics{
-		TotalSent:    total,
+		TotalSent:     total,
 		DeliveredRate: deliveredRate,
-		OpenRate:     openRate,
-		ByType:       byType,
-		ByChannel:    byChannel,
+		OpenRate:      openRate,
+		ByType:        byType,
+		ByChannel:     byChannel,
 	}
 }

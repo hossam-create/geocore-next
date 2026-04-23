@@ -17,6 +17,7 @@ const (
 	TopicModeration    = "moderation.events"
 	TopicShipping      = "shipping.events"
 	TopicNotifications = "notifications.events"
+	TopicEmail         = "email.send"
 )
 
 // ── Dead-letter queues ────────────────────────────────────────────────────────
@@ -30,6 +31,7 @@ const (
 	TopicModerationDLQ    = "moderation.events.dlq"
 	TopicShippingDLQ      = "shipping.events.dlq"
 	TopicNotificationsDLQ = "notifications.events.dlq"
+	TopicEmailDLQ         = "email.send.dlq"
 )
 
 // DLQFor returns the DLQ topic for a given primary topic.
@@ -53,6 +55,8 @@ func DLQFor(topic string) string {
 		return TopicShippingDLQ
 	case TopicNotifications:
 		return TopicNotificationsDLQ
+	case TopicEmail:
+		return TopicEmailDLQ
 	default:
 		return topic + ".dlq"
 	}
@@ -69,6 +73,7 @@ var AllTopics = []string{
 	TopicModeration,
 	TopicShipping,
 	TopicNotifications,
+	TopicEmail,
 	TopicOrdersDLQ,
 	TopicWalletDLQ,
 	TopicEscrowDLQ,
@@ -78,4 +83,5 @@ var AllTopics = []string{
 	TopicModerationDLQ,
 	TopicShippingDLQ,
 	TopicNotificationsDLQ,
+	TopicEmailDLQ,
 }

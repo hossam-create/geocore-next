@@ -1,0 +1,73 @@
+{{define "transaction_receipt.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Your GeoCore Receipt</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:40px 0;">
+  <tr><td align="center">
+    <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);">
+
+      <!-- Header -->
+      <tr><td style="background:#1a56db;padding:32px 40px;text-align:center;">
+        <span style="color:#ffffff;font-size:22px;font-weight:700;letter-spacing:.5px;">GeoCore</span>
+        <p style="margin:8px 0 0;color:#bfdbfe;font-size:13px;">Payment Confirmed</p>
+      </td></tr>
+
+      <!-- Success badge -->
+      <tr><td style="padding:32px 40px 0;text-align:center;">
+        <div style="display:inline-block;background:#dcfce7;border-radius:50%;width:56px;height:56px;line-height:56px;font-size:24px;">&#10003;</div>
+        <h2 style="margin:16px 0 4px;font-size:20px;color:#111827;">Payment Successful</h2>
+        <p style="margin:0;font-size:14px;color:#6b7280;">Order #{{.OrderID}}</p>
+      </td></tr>
+
+      <!-- Receipt details -->
+      <tr><td style="padding:24px 40px;">
+        <p style="margin:0 0 16px;font-size:15px;color:#374151;">Hi {{.Name}},</p>
+        <p style="margin:0 0 24px;font-size:15px;color:#6b7280;line-height:1.6;">
+          Thank you for your purchase! Here is your receipt.
+        </p>
+
+        <!-- Line items table -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+          <tr style="background:#f9fafb;">
+            <td style="padding:12px 16px;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;">Item</td>
+            <td style="padding:12px 16px;font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;text-align:right;">Amount</td>
+          </tr>
+          <tr>
+            <td style="padding:14px 16px;font-size:15px;color:#111827;border-top:1px solid #e5e7eb;">{{.ItemTitle}}</td>
+            <td style="padding:14px 16px;font-size:15px;color:#111827;border-top:1px solid #e5e7eb;text-align:right;font-weight:600;">{{.Amount}} {{.Currency}}</td>
+          </tr>
+          <tr style="background:#f0f4ff;">
+            <td style="padding:14px 16px;font-size:15px;font-weight:700;color:#1a56db;border-top:1px solid #e5e7eb;">Total Paid</td>
+            <td style="padding:14px 16px;font-size:15px;font-weight:700;color:#1a56db;border-top:1px solid #e5e7eb;text-align:right;">{{.Amount}} {{.Currency}}</td>
+          </tr>
+        </table>
+
+        <!-- Track order CTA -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+          <tr><td align="center">
+            <a href="{{.OrderURL}}"
+               style="display:inline-block;background:#1a56db;color:#ffffff;font-size:14px;font-weight:600;
+                      text-decoration:none;padding:12px 32px;border-radius:6px;">
+              Track Your Order
+            </a>
+          </td></tr>
+        </table>
+      </td></tr>
+
+      <!-- Footer -->
+      <tr><td style="background:#f9fafb;padding:20px 40px;border-top:1px solid #e5e7eb;text-align:center;">
+        <p style="margin:0;font-size:12px;color:#9ca3af;">
+          &copy; {{year}} GeoCore &bull;
+          Need help? <a href="mailto:support@geocore.app" style="color:#6b7280;">support@geocore.app</a>
+        </p>
+      </td></tr>
+
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>{{end}}

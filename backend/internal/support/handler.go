@@ -57,7 +57,7 @@ func (h *Handler) SubmitContact(c *gin.Context) {
 		adminEmail = os.Getenv("SMTP_FROM")
 	}
 	if adminEmail != "" {
-		go email.SendSupportContactEmail(adminEmail, req.Name, req.Email, req.Subject, req.Message)
+		_ = email.SendSupportContactEmail(adminEmail, req.Name, req.Email, req.Subject, req.Message)
 	}
 
 	response.Created(c, gin.H{

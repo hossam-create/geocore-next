@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/geocore-next/backend/internal/push"
 	"github.com/geocore-next/backend/internal/users"
 	pkgemail "github.com/geocore-next/backend/pkg/email"
 	"github.com/google/uuid"
@@ -78,36 +79,32 @@ func (s *Service) Notify(input NotifyInput) {
 	// ── 3. WebSocket broadcast (immediate) ────────────────────────────────────
 	s.hub.BroadcastToUser(input.UserID.String(), &notif)
 
-	// ── 4. FCM push notifications ─────────────────────────────────────────────
-	go s.sendPush(input, &prefs)
+	// ── 4. FCM push notifications (async via PushService worker) ────────────────
+	s.sendPush(input, &prefs)
 
 	// ── 5. Email notifications ────────────────────────────────────────────────
 	go s.sendEmail(input, &prefs)
 }
 
 func (s *Service) sendPush(input NotifyInput, prefs *NotificationPreference) {
-	if s.fcm == nil {
-		return
-	}
-
 	// Check push preference for this notification type
 	if !s.shouldSendPush(input.Type, prefs) {
 		return
 	}
 
-	// Fetch user's push tokens
-	var tokens []PushToken
-	s.db.Where("user_id = ?", input.UserID).Find(&tokens)
-	if len(tokens) == 0 {
-		return
+	// Delegate to the production PushService (handles FCM, WS bridge, rate limiting, idempotency, logging)
+	pushSvc := push.Default()
+	msg := &push.PushMessage{
+		UserID:           input.UserID,
+		NotificationType: input.Type,
+		Priority:         push.ResolvePriority(input.Type),
+		Title:            input.Title,
+		Body:             input.Body,
+		Data:             input.Data,
 	}
-
-	rawTokens := make([]string, len(tokens))
-	for i, t := range tokens {
-		rawTokens[i] = t.Token
+	if err := pushSvc.Send(context.Background(), msg); err != nil {
+		slog.Warn("notify: push send failed", "user_id", input.UserID, "type", input.Type, "error", err)
 	}
-
-	s.fcm.SendMulticast(rawTokens, input.Title, input.Body, input.Data)
 }
 
 func (s *Service) sendEmail(input NotifyInput, prefs *NotificationPreference) {

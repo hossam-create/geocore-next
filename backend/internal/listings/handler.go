@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/geocore-next/backend/internal/freeze"
+	"github.com/geocore-next/backend/internal/images"
 	"github.com/geocore-next/backend/internal/moderation"
 	"github.com/geocore-next/backend/internal/security"
 	"github.com/geocore-next/backend/internal/subscriptions"
@@ -310,24 +311,25 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	var req struct {
-		CategoryID   string            `json:"category_id"`
-		CategorySlug string            `json:"category"`
-		Title        string            `json:"title" binding:"required,min=5,max=200"`
-		Description  string            `json:"description" binding:"required,min=10"`
-		Price        *float64          `json:"price"`
-		Currency     string            `json:"currency"`
-		PriceType    string            `json:"price_type"`
-		Condition    string            `json:"condition"`
-		Type         string            `json:"type"`
-		Country      string            `json:"country" binding:"required"`
-		City         string            `json:"city" binding:"required"`
-		Address      string            `json:"address"`
-		Latitude     *float64          `json:"latitude"`
-		Longitude    *float64          `json:"longitude"`
-		ImageURLs    []string          `json:"image_urls"`
-		Images       []string          `json:"images"`
-		CustomFields map[string]string `json:"custom_fields"`
-		Attributes   map[string]string `json:"attributes"`
+		CategoryID    string            `json:"category_id"`
+		CategorySlug  string            `json:"category"`
+		Title         string            `json:"title" binding:"required,min=5,max=200"`
+		Description   string            `json:"description" binding:"required,min=10"`
+		Price         *float64          `json:"price"`
+		Currency      string            `json:"currency"`
+		PriceType     string            `json:"price_type"`
+		Condition     string            `json:"condition"`
+		Type          string            `json:"type"`
+		Country       string            `json:"country" binding:"required"`
+		City          string            `json:"city" binding:"required"`
+		Address       string            `json:"address"`
+		Latitude      *float64          `json:"latitude"`
+		Longitude     *float64          `json:"longitude"`
+		ImageURLs     []string          `json:"image_urls"`      // legacy: raw URL strings
+		Images        []string          `json:"images"`          // legacy: alias for image_urls
+		ImageGroupIDs []string          `json:"image_group_ids"` // new: group IDs from /images/upload
+		CustomFields  map[string]string `json:"custom_fields"`
+		Attributes    map[string]string `json:"attributes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, err.Error())
@@ -395,10 +397,19 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 
-	// Merge image URLs from both fields
+	// Merge image URLs from both legacy fields
 	imageURLs := req.ImageURLs
 	if len(imageURLs) == 0 {
 		imageURLs = req.Images
+	}
+
+	// Parse new-style image group IDs
+	var imageGroupIDs []uuid.UUID
+	for _, gid := range req.ImageGroupIDs {
+		parsed, e := uuid.Parse(gid)
+		if e == nil {
+			imageGroupIDs = append(imageGroupIDs, parsed)
+		}
 	}
 
 	expires := time.Now().AddDate(0, 2, 0) // 2 months
@@ -465,15 +476,48 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 
-	// Save images
-	for i, url := range imageURLs {
-		h.writeDB().Create(&ListingImage{
-			ID:        uuid.New(),
-			ListingID: listing.ID,
-			URL:       url,
-			SortOrder: i,
-			IsCover:   i == 0,
-		})
+	// Save images — prefer new group_id flow, fall back to legacy URL flow
+	if len(imageGroupIDs) > 0 {
+		// New flow: look up image variants from the images table
+		for i, gid := range imageGroupIDs {
+			var img images.Image
+			// Prefer large variant for listing display
+			if err := h.writeDB().Where("group_id = ? AND size = ?", gid, images.SizeLarge).First(&img).Error; err != nil {
+				// Fallback to medium, then any
+				if err := h.writeDB().Where("group_id = ? AND size = ?", gid, images.SizeMedium).First(&img).Error; err != nil {
+					if err := h.writeDB().Where("group_id = ?", gid).Order("size ASC").First(&img).Error; err != nil {
+						continue
+					}
+				}
+			}
+			h.writeDB().Create(&ListingImage{
+				ID:        uuid.New(),
+				ListingID: listing.ID,
+				GroupID:   gid,
+				ImageID:   img.ID,
+				URL:       img.URL,
+				Width:     img.Width,
+				Height:    img.Height,
+				Bytes:     img.Bytes,
+				MimeType:  img.MimeType,
+				Variant:   string(img.Size),
+				SortOrder: i,
+				IsCover:   i == 0,
+			})
+		}
+	} else {
+		// Legacy flow: raw URL strings (backward compatible)
+		for i, url := range imageURLs {
+			h.writeDB().Create(&ListingImage{
+				ID:        uuid.New(),
+				ListingID: listing.ID,
+				URL:       url,
+				Variant:   "original",
+				MimeType:  "image/jpeg",
+				SortOrder: i,
+				IsCover:   i == 0,
+			})
+		}
 	}
 
 	// Invalidate search result caches on new listing

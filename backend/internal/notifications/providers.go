@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/geocore-next/backend/pkg/email"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -57,7 +59,7 @@ func (p *FirebaseProvider) SendEmail(email string, subject string, body string) 
 	return nil
 }
 
-// EmailProvider wraps SMTP as a NotificationProvider.
+// EmailProvider routes email notifications through the production EmailService.
 type EmailProvider struct {
 	db *gorm.DB
 }
@@ -66,8 +68,20 @@ func (p *EmailProvider) SendPush(userID string, title string, body string, data 
 	return nil
 }
 
-func (p *EmailProvider) SendEmail(email string, subject string, body string) error {
-	slog.Info("notify: email sent", "to", email, "subject", subject)
+func (p *EmailProvider) SendEmail(addr string, subject string, body string) error {
+	msg := &email.Message{
+		To:             addr,
+		Subject:        subject,
+		TemplateName:   "notification",
+		Data:           email.NotificationData("there", subject, body, "", ""),
+		IdempotencyKey: "notify:" + addr + ":" + subject,
+		CreatedAt:      time.Now(),
+	}
+	if err := email.Default().SendAsync(context.Background(), msg); err != nil {
+		slog.Error("notify: email enqueue failed", "to", addr, "error", err)
+		return err
+	}
+	slog.Info("notify: email enqueued", "to", addr, "subject", subject)
 	return nil
 }
 
@@ -165,15 +179,27 @@ func (s *Service) NotifyUser(input NotifyInput) {
 	// Email with retry
 	if cfg.EnableEmail {
 		SafeGo(func() {
-			provider := &EmailProvider{db: s.db}
-			var email string
-			s.db.Table("users").Where("id = ?", input.UserID).Select("email").Scan(&email)
-			if email != "" {
+			var u struct {
+				Email string
+				Name  string
+			}
+			s.db.Table("users").Where("id = ?", input.UserID).Select("email, name").Scan(&u)
+			if u.Email != "" {
+				msg := &email.Message{
+					To:             u.Email,
+					ToName:         u.Name,
+					UserID:         input.UserID.String(),
+					Subject:        input.Title,
+					TemplateName:   "notification",
+					Data:           email.NotificationData(u.Name, input.Title, input.Body, "", ""),
+					IdempotencyKey: "notify:" + input.UserID.String() + ":" + input.Type,
+					CreatedAt:      time.Now(),
+				}
 				if err := retrySend(func() error {
-					return provider.SendEmail(email, input.Title, input.Body)
+					return email.Default().SendAsync(context.Background(), msg)
 				}, "email", logCtx); err != nil {
 					IncrementDeliveryStat("email_failed")
-					LogFailedNotification(s.db, input.UserID, "email", input.Type, nil, err.Error())
+					LogFailedNotification(s.db, input.UserID, "email", input.Type, toInterfaceMap(input.Data), err.Error())
 				} else {
 					IncrementDeliveryStat("email_sent")
 				}

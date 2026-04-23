@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/smtp"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -46,67 +44,21 @@ type HandlerDependencies struct {
 	AnalyticsClient *internalanalytics.PostHogClient
 }
 
-// HandleEmail sends email notifications
+// HandleEmail delivers an email by delegating to the production EmailService.
+// The job payload is decoded into a pkg/email.Message which goes through the
+// full pipeline: idempotency → rate-limit → template render → provider send.
 func (d *HandlerDependencies) HandleEmail(ctx context.Context, job *Job) error {
 	to, _ := job.Payload["to"].(string)
-	subject, _ := job.Payload["subject"].(string)
-	body, _ := job.Payload["body"].(string)
-
-	if to == "" || subject == "" {
-		return fmt.Errorf("email job requires to and subject")
+	if to == "" {
+		return fmt.Errorf("email job missing 'to' field")
 	}
 
-	if body == "" {
-		template, _ := job.Payload["template"].(string)
-		data, _ := job.Payload["data"].(map[string]interface{})
-
-		// Try loading template from DB
-		if template != "" && d.DB != nil {
-			type emailTpl struct {
-				Subject  string `gorm:"size:300"`
-				BodyHTML string `gorm:"type:text"`
-				BodyText string `gorm:"type:text"`
-				IsActive bool   `gorm:"default:true"`
-			}
-			var tpl emailTpl
-			if err := d.DB.Table("email_templates").Where("slug = ? AND is_active = true", template).First(&tpl).Error; err == nil {
-				subject = tpl.Subject
-				body = tpl.BodyHTML
-				if tpl.BodyText != "" {
-					body = tpl.BodyText
-				}
-				// Replace {{variable}} placeholders with data values
-				if data != nil {
-					for k, v := range data {
-						val := fmt.Sprintf("%v", v)
-						subject = strings.ReplaceAll(subject, "{{"+k+"}}", val)
-						body = strings.ReplaceAll(body, "{{"+k+"}}", val)
-					}
-				}
-			}
-		}
-
-		// Fallback to hardcoded if no template found
-		if body == "" {
-			if data != nil {
-				if b, err := json.Marshal(data); err == nil {
-					body = fmt.Sprintf("Template: %s\nData: %s", template, string(b))
-				}
-			}
-			if body == "" {
-				body = fmt.Sprintf("Template: %s", template)
-			}
-		}
-	}
-
-	err := d.sendEmailSMTP(to, subject, body)
-	if err != nil {
+	if err := pkgemail.ProcessJobPayload(ctx, job.Payload); err != nil {
 		slog.Error("email job failed", "job_id", job.ID, "to", to, "error", err)
 		return err
 	}
 
-	slog.Info("Email sent", "job_id", job.ID, "to", to)
-
+	slog.Info("email job completed", "job_id", job.ID, "to", to)
 	return nil
 }
 
@@ -598,39 +550,6 @@ func (d *HandlerDependencies) HandleAnalytics(ctx context.Context, job *Job) err
 	slog.Info("Analytics event sent", "job_id", job.ID, "event", event, "user_id", userID)
 
 	return nil
-}
-
-func (d *HandlerDependencies) sendEmailSMTP(to, subject, body string) error {
-	host := os.Getenv("SMTP_HOST")
-	port := os.Getenv("SMTP_PORT")
-	user := os.Getenv("SMTP_USER")
-	pass := os.Getenv("SMTP_PASS")
-	from := os.Getenv("SMTP_FROM")
-
-	if port == "" {
-		port = "587"
-	}
-	if from == "" {
-		from = user
-	}
-	if host == "" || from == "" {
-		slog.Info("SMTP not configured; email logged only", "to", to, "subject", subject)
-		return nil
-	}
-
-	msg := strings.Builder{}
-	msg.WriteString("From: " + from + "\r\n")
-	msg.WriteString("To: " + to + "\r\n")
-	msg.WriteString("Subject: " + subject + "\r\n")
-	msg.WriteString("MIME-Version: 1.0\r\n")
-	msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
-	msg.WriteString(body)
-
-	var auth smtp.Auth
-	if user != "" && pass != "" {
-		auth = smtp.PlainAuth("", user, pass, host)
-	}
-	return smtp.SendMail(host+":"+port, auth, from, []string{to}, []byte(msg.String()))
 }
 
 func (d *HandlerDependencies) createNotification(ctx context.Context, userID uuid.UUID, nType, title, body string, data map[string]string) error {

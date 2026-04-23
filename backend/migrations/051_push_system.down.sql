@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS push_logs;
+DROP TABLE IF EXISTS user_devices;
